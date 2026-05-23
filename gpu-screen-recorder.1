@@ -484,7 +484,15 @@ Instant replay (last 60 seconds):
 .PP
 .nf
 .RS
-gpu-screen-recorder -w screen -c mkv -r 60 -o ~/Videos
+gpu-screen-recorder -w screen -c mp4 -r 60 -o ~/Videos
+.RE
+.fi
+.PP
+Instant replay with constant framerate (recommended for predicable ram usage):
+.PP
+.nf
+.RS
+gpu-screen-recorder -w screen -c mp4 -r 60 -bm cbr -q 40000 -o ~/Videos
 .RE
 .fi
 .PP
@@ -508,7 +516,7 @@ Instant replay and launch a script when saving replay:
 .PP
 .nf
 .RS
-gpu-screen-recorder -w screen -c mkv -r 60 -sc ./script.sh -o ~/Videos
+gpu-screen-recorder -w screen -c mp4 -r 60 -sc ./script.sh -o ~/Videos
 .RE
 .fi
 .PP
