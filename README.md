@@ -40,7 +40,8 @@ The only official ways to install GPU Screen Recorder is either from source, arc
 If you install GPU Screen Recorder from somewhere else and have an issue then try installing it from one of the official sources before reporting it as an issue.\
 If you still prefer to install GPU Screen Recorder with a package manager instead of from source or as a flatpak then you may be able to find a package for your distro.\
 Here are some known unofficial packages:
-* Debian/Ubuntu: [Pacstall](https://pacstall.dev/packages/gpu-screen-recorder)
+* Ubuntu: [Pacstall](https://pacstall.dev/packages/gpu-screen-recorder)
+* Debian: [gpu-screen-recorder-cli](https://tracker.debian.org/pkg/gpu-screen-recorder)
 * Nix: [NixOS wiki](https://wiki.nixos.org/wiki/Gpu-screen-recorder)
 * openSUSE: [openSUSE software repository](https://software.opensuse.org/package/gpu-screen-recorder)
 * Fedora, CentOS: [Copr](https://copr.fedorainfracloud.org/coprs/brycensranch/gpu-screen-recorder-git/)
