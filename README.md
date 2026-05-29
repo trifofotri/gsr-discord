@@ -40,7 +40,7 @@ The only official ways to install GPU Screen Recorder is either from source, arc
 If you install GPU Screen Recorder from somewhere else and have an issue then try installing it from one of the official sources before reporting it as an issue.\
 If you still prefer to install GPU Screen Recorder with a package manager instead of from source or as a flatpak then you may be able to find a package for your distro.\
 Here are some known unofficial packages:
-* Ubuntu: [Pacstall](https://pacstall.dev/packages/gpu-screen-recorder)
+* Ubuntu: [gpu-screen-recorder-cli](https://launchpad.net/ubuntu/+source/gpu-screen-recorder)
 * Debian: [gpu-screen-recorder-cli](https://tracker.debian.org/pkg/gpu-screen-recorder)
 * Nix: [NixOS wiki](https://wiki.nixos.org/wiki/Gpu-screen-recorder)
 * openSUSE: [openSUSE software repository](https://software.opensuse.org/package/gpu-screen-recorder)
@@ -122,6 +122,11 @@ By default videos are recorded with constant quality, but with replay mode you m
 Streaming works the same way as recording, but the `-o` argument should be path to the live streaming service you want to use (including your live streaming key). Take a look at `scripts/twitch-stream.sh` to see an example of how to stream to twitch.\
 GPU Screen Recorder uses Ffmpeg so GPU Screen Recorder supports all protocols that Ffmpeg supports.\
 If you want to reduce latency one thing you can do is to use the `-keyint` option, for example `-keyint 0.5`. Lower value means lower latency at the cost of increased bitrate/decreased quality.
+## Very low latency streaming (WHIP)
+FFmpeg since version 7.1 supports the WHIP protocol for very low latency streaming (milliseconds latency). Here is a simple way to set it up:
+1. Download the latest [mediamtx](https://github.com/bluenviron/mediamtx/releases/) binary and run it (just run `./mediamtx`)
+2. Run `gpu-screen-recorder` with WHIP, for example: `gpu-screen-recorder -w screen -f 60 -k h264 -bm cbr -q 20000 -a default_output -ac opus -c whip -o "http://localhost:8889/mystream/whip"`.
+   If you have a high refresh rate monitor you can set `-f 60` framerate option to your monitors framerate (for example `-f 144`) to have even lower latency.
 ## Recording while using replay/streaming
 You can record a regular video while using replay/streaming by launching GPU Screen Recorder with the `-ro` option to specify a directory where to save the recording (for example: `gpu-screen-recorder -w screen -c mp4 -r 60 -o "$HOME/Videos/replays" -ro "$HOME/Videos/recordings"`).\
 To start/stop (and save) recording use the SIGRTMIN signal, for example `pkill -SIGRTMIN -f "^gpu-screen-recorder"`. The path to the video will be displayed in stdout when saving the video.\

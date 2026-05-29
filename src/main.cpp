@@ -3026,7 +3026,7 @@ static gsr_audio_codec select_audio_codec_with_fallback(gsr_audio_codec audio_co
             break;
         }
         case GSR_AUDIO_CODEC_OPUS: {
-            if(file_extension != "mp4" && file_extension != "mkv" && file_extension != "webm" && file_extension != "ts") {
+            if(file_extension != "mp4" && file_extension != "mkv" && file_extension != "webm" && file_extension != "ts" && file_extension != "whip") {
                 //audio_codec_to_use = "aac";
                 audio_codec = GSR_AUDIO_CODEC_AAC;
                 fprintf(stderr, "gsr warning: opus audio codec is only supported by .mp4, .mkv, .webm and .ts files, falling back to aac instead\n");
@@ -3493,30 +3493,18 @@ static bool get_image_format_from_filename(const char *filename, gsr_image_forma
     }
 }
 
-// TODO: replace this with start_recording_create_steams
-static bool av_open_file_write_header(AVFormatContext *av_format_context, const char *filename, const char *ffmpeg_opts) {
-    int ret = avio_open(&av_format_context->pb, filename, AVIO_FLAG_WRITE);
-    if(ret < 0) {
-        fprintf(stderr, "gsr error: Could not open '%s': %s\n", filename, av_error_to_string(ret));
-        return false;
-    }
-
+static void av_write_header(AVFormatContext *av_format_context, const char *ffmpeg_opts) {
     AVDictionary *options = nullptr;
     av_dict_set(&options, "strict", "experimental", 0);
 
     if(ffmpeg_opts)
         av_dict_parse_string(&options, ffmpeg_opts, "=", ";", 0);
 
-    ret = avformat_write_header(av_format_context, &options);
+    const int ret = avformat_write_header(av_format_context, &options);
     if(ret < 0)
         fprintf(stderr, "Error occurred when writing header to output file: %s\n", av_error_to_string(ret));
 
-    const bool success = ret >= 0;
-    if(!success)
-        avio_close(av_format_context->pb);
-
     av_dict_free(&options);
-    return success;
 }
 
 static int audio_codec_get_frame_size(gsr_audio_codec audio_codec) {
@@ -3780,8 +3768,6 @@ int main(int argc, char **argv) {
 
     validate_merged_audio_inputs_app_audio(requested_audio_inputs, app_audio_names);
 
-    const bool is_replaying = arg_parser.replay_buffer_size_secs != -1;
-
     bool wayland = false;
     Display *dpy = XOpenDisplay(nullptr);
     if(dpy) {
@@ -3896,6 +3882,9 @@ int main(int argc, char **argv) {
             file_extension = file_extension.substr(0, comma_index);
     }
 
+    if(file_extension.empty())
+        file_extension = arg_parser.container_format ? arg_parser.container_format : "";
+
     const bool force_no_audio_offset = arg_parser.is_livestream || arg_parser.is_output_piped || (file_extension != "mp4" && file_extension != "mkv" && file_extension != "webm");
     const double target_fps = 1.0 / (double)arg_parser.fps;
 
@@ -3927,7 +3916,7 @@ int main(int argc, char **argv) {
 
     const enum AVPixelFormat video_pix_fmt = get_pixel_format(arg_parser.video_codec, egl.gpu_info.vendor, arg_parser.video_encoder == GSR_VIDEO_ENCODER_HW_CPU);
     AVCodecContext *video_codec_context = create_video_codec_context(video_pix_fmt, video_codec_f, egl, arg_parser, video_size.x, video_size.y);
-    if(!is_replaying)
+    if(!arg_parser.is_replaying)
         video_stream = create_stream(av_format_context, video_codec_context);
 
     AVFrame *video_frame = av_frame_alloc();
@@ -4014,7 +4003,7 @@ int main(int argc, char **argv) {
         AVCodecContext *audio_codec_context = create_audio_codec_context(arg_parser.fps, arg_parser.audio_codec, use_amix, arg_parser.audio_bitrate);
 
         AVStream *audio_stream = nullptr;
-        if(!is_replaying) {
+        if(!arg_parser.is_replaying) {
             audio_stream = create_stream(av_format_context, audio_codec_context);
             if(gsr_encoder_add_recording_destination(&encoder, audio_codec_context, av_format_context, audio_stream, 0) == (size_t)-1)
                 fprintf(stderr, "gsr error: added too many audio sources\n");
@@ -4080,10 +4069,16 @@ int main(int argc, char **argv) {
 
     //av_dump_format(av_format_context, 0, filename, 1);
 
-    if(!is_replaying) {
-        if(!av_open_file_write_header(av_format_context, arg_parser.filename, arg_parser.ffmpeg_opts))
+    if(!arg_parser.is_replaying && !(output_format->flags & AVFMT_NOFILE)) {
+        const int ret = avio_open(&av_format_context->pb, arg_parser.filename, AVIO_FLAG_WRITE);
+        if(ret < 0) {
+            fprintf(stderr, "gsr error: Could not open '%s': %s\n", arg_parser.filename, av_error_to_string(ret));
             _exit(1);
+        }
     }
+
+    if(!arg_parser.is_replaying)
+        av_write_header(av_format_context, arg_parser.ffmpeg_opts);
 
     double fps_start_time = clock_get_monotonic_seconds();
     //double frame_timer_start = fps_start_time;
@@ -4478,7 +4473,7 @@ int main(int argc, char **argv) {
             gsr_video_encoder_copy_textures_to_frame(video_encoder, video_frame, output_color_conversion);
 
             for(VideoSource &video_source : video_sources) {
-                if(hdr && !hdr_metadata_set && !is_replaying && add_hdr_metadata_to_video_stream(video_source.capture, video_stream))
+                if(hdr && !hdr_metadata_set && !arg_parser.is_replaying && add_hdr_metadata_to_video_stream(video_source.capture, video_stream))
                     hdr_metadata_set = true;
             }
 
@@ -4516,7 +4511,7 @@ int main(int argc, char **argv) {
             video_pts_counter += num_missed_frames;
         }
 
-        if(toggle_pause == 1 && !is_replaying) {
+        if(toggle_pause == 1 && !arg_parser.is_replaying) {
             const bool new_paused_state = !paused;
             if(new_paused_state) {
                 paused_time_start = clock_get_monotonic_seconds();
@@ -4603,7 +4598,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        if(save_replay_seconds != 0 && !save_replay_thread.valid() && is_replaying) {
+        if(save_replay_seconds != 0 && !save_replay_thread.valid() && arg_parser.is_replaying) {
             int current_save_replay_seconds = save_replay_seconds;
             if(current_save_replay_seconds > 0)
                 current_save_replay_seconds += arg_parser.keyint;
@@ -4683,11 +4678,11 @@ int main(int argc, char **argv) {
         amix_thread.join();
 
     // TODO: Replace this with start_recording_create_steams
-    if(!is_replaying && av_write_trailer(av_format_context) != 0) {
+    if(!arg_parser.is_replaying && av_write_trailer(av_format_context) != 0) {
         //fprintf(stderr, "Failed to write trailer\n");
     }
 
-    if(!is_replaying) {
+    if(!arg_parser.is_replaying && !(output_format->flags & AVFMT_NOFILE)) {
         avio_close(av_format_context->pb);
         avformat_free_context(av_format_context);
     }
@@ -4708,7 +4703,7 @@ int main(int argc, char **argv) {
         gsr_kms_client_deinit(&kms_client);
     }
 
-    if(!is_replaying && arg_parser.recording_saved_script)
+    if(!arg_parser.is_replaying && arg_parser.recording_saved_script)
         run_recording_saved_script_async(arg_parser.recording_saved_script, arg_parser.filename, "regular");
 
     if(dpy) {

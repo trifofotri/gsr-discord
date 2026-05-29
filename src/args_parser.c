@@ -398,18 +398,18 @@ static bool args_parser_set_values(args_parser *self) {
     if(self->container_format && strcmp(self->container_format, "mkv") == 0)
         self->container_format = "matroska";
 
-    const bool is_replaying = self->replay_buffer_size_secs != -1;
+    self->is_replaying = self->replay_buffer_size_secs != -1;
     self->is_livestream = false;
     self->filename = args_get_value_by_key(self->args, NUM_ARGS, "-o");
     if(self->filename) {
         self->is_livestream = is_livestream_path(self->filename);
         if(self->is_livestream) {
-            if(is_replaying) {
+            if(self->is_replaying) {
                 fprintf(stderr, "gsr error: replay mode is not applicable to live streaming\n");
                 return false;
             }
         } else {
-            if(!is_replaying) {
+            if(!self->is_replaying) {
                 char directory_buf[PATH_MAX];
                 snprintf(directory_buf, sizeof(directory_buf), "%s", self->filename);
                 char *directory = dirname(directory_buf);
@@ -435,7 +435,7 @@ static bool args_parser_set_values(args_parser *self) {
             }
         }
     } else {
-        if(!is_replaying) {
+        if(!self->is_replaying) {
             self->filename = "/dev/stdout";
         } else {
             fprintf(stderr, "gsr error: Option -o is required when using option -r\n");

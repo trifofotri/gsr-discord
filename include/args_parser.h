@@ -98,6 +98,7 @@ typedef struct {
     bool restore_portal_session;
     bool restart_replay_on_save;
     bool write_first_frame_ts;
+    bool is_replaying;
     bool is_livestream;
     bool is_output_piped;
     bool low_latency_recording;

@@ -422,3 +422,8 @@ Make -fm content the default, but first make it record at no lower than 2 fps if
 Fix camera capture on nvidia x11. It doesn't work with mjpeg either now because external shader compilation fails.
 
 Revert the revert of improving pipewire capture, for better cursor capture. It caused glitches for some, especially in kde plasma when hdr is enabled. Try marking test and moving the cursor and see.
+
+Add the option to use application audio with exectable name, or automatically check against both application name and executable name.
+    In the ui it should also list the application name beside the app audio.
+
+Region capture works incorrectly on gnome with hidpi, especially with 150% scaling. Same in gsr ui.
