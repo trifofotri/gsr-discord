@@ -3612,6 +3612,9 @@ static void validate_args_with_capture_sources(args_parser &arg_parser, const st
 }
 
 static void install_cuda_no_stable_perf_limit() {
+    if(access("/proc/driver/nvidia/version", F_OK) != 0)
+        return;
+
     const char *home = getenv("HOME");
     if(!home) {
         fprintf(stderr, "gsr warning: install_cuda_no_stable_perf_limit: $HOME not set\n");
