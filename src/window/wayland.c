@@ -1,4 +1,5 @@
 #include "../../include/window/wayland.h"
+#include "../../include/wayland_host_bridge.h"
 
 #include "../../include/vec2.h"
 #include "../../include/defs.h"
@@ -295,7 +296,7 @@ static void gsr_window_wayland_deinit(gsr_window_wayland *self) {
 }
 
 static bool gsr_window_wayland_init(gsr_window_wayland *self) {
-    self->display = wl_display_connect(NULL);
+    self->display = wayland_connect_to_host();
     if(!self->display) {
         fprintf(stderr, "gsr error: gsr_window_wayland_init failed: failed to connect to the Wayland server\n");
         goto fail;

@@ -43,6 +43,7 @@ src = [
     'src/args_parser.c',
     'src/defs.c',
     'src/plugins.c',
+    'src/wayland_host_bridge.c',
     'src/sound.cpp',
     'src/main.cpp',
 ]
