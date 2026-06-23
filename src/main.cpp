@@ -1124,7 +1124,7 @@ static RecordingStartResult start_recording_create_streams(const char *filename,
 
     const int open_ret = avio_open(&av_format_context->pb, filename, AVIO_FLAG_WRITE);
     if(open_ret < 0) {
-        fprintf(stderr, "gsr error: start: could not open '%s': %s\n", filename, av_error_to_string(open_ret));
+        fprintf(stderr, "gsr error: start_recording_create_streams: could not open '%s': %s\n", filename, av_error_to_string(open_ret));
         return result;
     }
 
@@ -1137,7 +1137,7 @@ static RecordingStartResult start_recording_create_streams(const char *filename,
     const int header_write_ret = avformat_write_header(av_format_context, &options);
     av_dict_free(&options);
     if(header_write_ret < 0) {
-        fprintf(stderr, "gsr error: start: error occurred when writing header to output file: %s\n", av_error_to_string(header_write_ret));
+        fprintf(stderr, "gsr error: start_recording_create_streams: error occurred when writing header to output file: %s\n", av_error_to_string(header_write_ret));
         avio_close(av_format_context->pb);
         avformat_free_context(av_format_context);
         return result;
@@ -1165,7 +1165,7 @@ static bool stop_recording_close_streams(AVFormatContext *av_format_context) {
     return trailer_written && closed;
 }
 
-static std::future<void> save_replay_thread;
+static std::future<bool> save_replay_thread;
 static std::string save_replay_output_filepath;
 
 static std::string create_new_recording_filepath_from_timestamp(std::string directory, const char *filename_prefix, const std::string &file_extension, bool date_folders) {
@@ -1196,9 +1196,9 @@ struct AudioPtsOffset {
     int stream_index = 0;
 };
 
-static void save_replay_async(AVCodecContext *video_codec_context, int video_stream_index, const std::vector<AudioTrack> &audio_tracks, gsr_encoder *encoder, const args_parser &arg_parser, const std::string &file_extension, bool date_folders, bool hdr, std::vector<VideoSource> &video_sources, int current_save_replay_seconds) {
+static bool save_replay_async(AVCodecContext *video_codec_context, int video_stream_index, const std::vector<AudioTrack> &audio_tracks, gsr_encoder *encoder, const args_parser &arg_parser, const std::string &file_extension, bool date_folders, bool hdr, std::vector<VideoSource> &video_sources, int current_save_replay_seconds) {
     if(save_replay_thread.valid())
-        return;
+        return true;
 
     pthread_mutex_lock(&encoder->replay_mutex);
     gsr_replay_buffer *cloned_replay_buffer = gsr_replay_buffer_clone(encoder->replay_buffer);
@@ -1206,7 +1206,7 @@ static void save_replay_async(AVCodecContext *video_codec_context, int video_str
     if(!cloned_replay_buffer) {
         // TODO: Return this error to mark the replay as failed
         fprintf(stderr, "gsr error: failed to save replay: failed to clone replay buffer\n");
-        return;
+        return false;
     }
 
     const gsr_replay_buffer_iterator search_start_iterator = current_save_replay_seconds == save_replay_seconds_full ? gsr_replay_buffer_iterator{0, 0} : gsr_replay_buffer_find_packet_index_by_time_passed(cloned_replay_buffer, current_save_replay_seconds);
@@ -1216,7 +1216,7 @@ static void save_replay_async(AVCodecContext *video_codec_context, int video_str
         pthread_mutex_lock(&encoder->replay_mutex);
         gsr_replay_buffer_destroy(cloned_replay_buffer);
         pthread_mutex_unlock(&encoder->replay_mutex);
-        return;
+        return true;
     }
 
     const int64_t video_pts_offset = gsr_replay_buffer_iterator_get_packet(cloned_replay_buffer, video_start_iterator)->pts;
@@ -1235,13 +1235,15 @@ static void save_replay_async(AVCodecContext *video_codec_context, int video_str
         pthread_mutex_lock(&encoder->replay_mutex);
         gsr_replay_buffer_destroy(cloned_replay_buffer);
         pthread_mutex_unlock(&encoder->replay_mutex);
-        return;
+        return false;
     }
 
     save_replay_output_filepath = std::move(output_filepath);
 
     save_replay_thread = std::async(std::launch::async, [video_stream_index, recording_start_result, video_start_iterator, video_pts_offset, audio_pts_offsets{std::move(audio_pts_offsets)}, video_codec_context, cloned_replay_buffer, encoder]() mutable {
+        bool success = true;
         gsr_replay_buffer_iterator replay_iterator = video_start_iterator;
+
         for(;;) {
             AVPacket *replay_packet = gsr_replay_buffer_iterator_get_packet(cloned_replay_buffer, replay_iterator);
             uint8_t *replay_packet_data = NULL;
@@ -1253,11 +1255,13 @@ static void save_replay_async(AVCodecContext *video_codec_context, int video_str
 
             if(!replay_packet) {
                 fprintf(stderr, "gsr error: save_replay_async: no replay packet\n");
+                success = false;
                 break;
             }
 
             if(!replay_packet->data && !replay_packet_data) {
                 fprintf(stderr, "gsr error: save_replay_async: no replay packet data\n");
+                success = false;
                 break;
             }
 
@@ -1316,7 +1320,11 @@ static void save_replay_async(AVCodecContext *video_codec_context, int video_str
         pthread_mutex_lock(&encoder->replay_mutex);
         gsr_replay_buffer_destroy(cloned_replay_buffer);
         pthread_mutex_unlock(&encoder->replay_mutex);
+
+        return success;
     });
+
+    return true;
 }
 
 static void split_string(const std::string &str, char delimiter, std::function<bool(const char*,size_t)> callback) {
@@ -4589,8 +4597,8 @@ int main(int argc, char **argv) {
         }
 
         if(save_replay_thread.valid() && save_replay_thread.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            save_replay_thread.get();
-            if(save_replay_output_filepath.empty()) {
+            const bool replay_save_result = save_replay_thread.get();
+            if(save_replay_output_filepath.empty() || !replay_save_result) {
                 printf("gsr error: Failed to save replay\n");
                 fflush(stdout);
             } else {
@@ -4608,7 +4616,11 @@ int main(int argc, char **argv) {
 
             save_replay_seconds = 0;
             save_replay_output_filepath.clear();
-            save_replay_async(video_codec_context, VIDEO_STREAM_INDEX, audio_tracks, &encoder, arg_parser, file_extension, arg_parser.date_folders, hdr, video_sources, current_save_replay_seconds);
+            const bool replay_start_result = save_replay_async(video_codec_context, VIDEO_STREAM_INDEX, audio_tracks, &encoder, arg_parser, file_extension, arg_parser.date_folders, hdr, video_sources, current_save_replay_seconds);
+            if(!replay_start_result) {
+                printf("gsr error: Failed to save replay\n");
+                fflush(stdout);
+            }
 
             if(arg_parser.restart_replay_on_save && current_save_replay_seconds == save_replay_seconds_full) {
                 pthread_mutex_lock(&encoder.replay_mutex);
