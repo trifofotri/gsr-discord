@@ -471,8 +471,21 @@ static void gsr_video_encoder_vulkan_stop(gsr_video_encoder_vulkan *self, AVCode
 static bool gsr_video_encoder_vulkan_start(gsr_video_encoder *encoder, AVCodecContext *video_codec_context, AVFrame *frame) {
     gsr_video_encoder_vulkan *self = encoder->priv;
 
-    video_codec_context->width = FFALIGN(video_codec_context->width, 2);
-    video_codec_context->height = FFALIGN(video_codec_context->height, 2);
+    if(self->params.egl->gpu_info.vendor == GSR_GPU_VENDOR_AMD && video_codec_context->codec_id == AV_CODEC_ID_HEVC) {
+        video_codec_context->width = FFALIGN(video_codec_context->width, 2);
+        video_codec_context->height = FFALIGN(video_codec_context->height, 2);
+    } else if(self->params.egl->gpu_info.vendor == GSR_GPU_VENDOR_AMD && video_codec_context->codec_id == AV_CODEC_ID_AV1) {
+        // TODO: Dont do this for VCN 5 and forward which should fix this hardware bug
+        video_codec_context->width = FFALIGN(video_codec_context->width, 64);
+        video_codec_context->height = FFALIGN(video_codec_context->height, 16);
+    } else {
+        video_codec_context->width = FFALIGN(video_codec_context->width, 2);
+        video_codec_context->height = FFALIGN(video_codec_context->height, 2);
+    }
+
+    if(FFALIGN(video_codec_context->width, 2) != FFALIGN(frame->width, 2) || FFALIGN(video_codec_context->height, 2) != FFALIGN(frame->height, 2)) {
+        fprintf(stderr, "gsr warning: gsr_video_encoder_vulkan_start: black bars have been added to the video because of a bug in AMD drivers/hardware. Record with h264/hevc vulkan codec instead (-k h264_vulkan) to get around this issue\n");
+    }
 
     if(video_codec_context->width < 128)
         video_codec_context->width = 128;

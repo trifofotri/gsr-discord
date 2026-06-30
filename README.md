@@ -289,3 +289,5 @@ This is an nvidia power management driver bug which can happen when the system i
 ## Recording fails when using webcam on nvidia X11
 This is a known issue. The issue is that nvfbc which is used for screen capture only supports glx on older systems and glx is not compatible with the webcam capture method used in GPU Screen Recorder.
 This will be fixed in the future.
+## Desktop portal capture doesn't work on my AMD GPU on Hyprland
+This is a hyprland bug. Capture the monitor directly with `-w monitor` or use another Wayland compositor.
