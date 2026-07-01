@@ -883,6 +883,23 @@ gsr_capture* gsr_capture_v4l2_create(const gsr_capture_v4l2_params *params) {
     return cap;
 }
 
+static int gsr_capture_v4l2_supported_setup_compare(const void *a, const void *b) {
+    const gsr_capture_v4l2_supported_setup *setup_a = a;
+    const gsr_capture_v4l2_supported_setup *setup_b = b;
+
+    const uint64_t resolution_a = (uint64_t)setup_a->resolution.width * (uint64_t)setup_a->resolution.height;
+    const uint64_t resolution_b = (uint64_t)setup_b->resolution.width * (uint64_t)setup_b->resolution.height;
+    if(resolution_a != resolution_b)
+        return resolution_a < resolution_b ? 1 : -1;
+
+    const uint32_t framerate_a = gsr_capture_v4l2_framerate_to_number(setup_a->framerate);
+    const uint32_t framerate_b = gsr_capture_v4l2_framerate_to_number(setup_b->framerate);
+    if(framerate_a != framerate_b)
+        return framerate_a < framerate_b ? 1 : -1;
+
+    return 0;
+}
+
 void gsr_capture_v4l2_list_devices(v4l2_devices_query_callback callback, void *userdata) {
     const bool has_libturbojpeg_lib = is_libturbojpeg_library_available();
     char v4l2_device_path[128];
@@ -914,6 +931,8 @@ void gsr_capture_v4l2_list_devices(v4l2_devices_query_callback callback, void *u
         const size_t num_supported_setups = gsr_capture_v4l2_get_supported_setups(fd, supported_setups, 128, has_libturbojpeg_lib);
         if(num_supported_setups == 0)
             continue;
+
+        qsort(supported_setups, num_supported_setups, sizeof(gsr_capture_v4l2_supported_setup), gsr_capture_v4l2_supported_setup_compare);
 
         for(size_t j = 0; j < num_supported_setups; ++j) {
             const gsr_capture_v4l2_supported_setup *setup = &supported_setups[j];
