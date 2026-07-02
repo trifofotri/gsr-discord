@@ -354,7 +354,7 @@ static int kms_get_fb(gsr_drm *drm, gsr_kms_response *response) {
         gsr_kms_rotation rotation = KMS_ROT_0;
         const uint32_t property_mask = plane_get_properties(drm->drmfd, plane->plane_id, &x, &y, &src_x, &src_y, &src_w, &src_h, &rotation);
         if(!(property_mask & PLANE_PROPERTY_IS_PRIMARY) && !(property_mask & PLANE_PROPERTY_IS_CURSOR))
-            continue;
+            goto cleanup_handles;
 
         int fb_fds[GSR_KMS_MAX_DMA_BUFS];
         const int num_fb_fds = drm_prime_handles_to_fds(drm, drmfb, fb_fds);
