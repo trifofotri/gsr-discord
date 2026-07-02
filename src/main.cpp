@@ -2630,6 +2630,41 @@ static void match_app_audio_input_to_available_apps(const std::vector<AudioInput
     }
 }
 
+struct AudioTrackDescription {
+    std::vector<std::string> devices;
+    std::vector<std::string> applications;
+    bool app_inverse = false;
+
+    std::string to_title() const {
+        std::string title;
+        if(!devices.empty()) {
+            title += "Devices: ";
+            for(size_t i = 0; i < devices.size(); ++i) {
+                if(i > 0)
+                    title += ", ";
+                title += devices[i];
+            }
+        }
+
+        if(!applications.empty()) {
+            if(!title.empty())
+                title += ". ";
+
+            if(app_inverse)
+                title += "All applications except: ";
+            else
+                title += "Applications: ";
+
+            for(size_t i = 0; i < applications.size(); ++i) {
+                if(i > 0)
+                    title += ", ";
+                title += applications[i];
+            }
+        }
+        return title;
+    }
+};
+
 // Manually check if the audio inputs we give exist. This is only needed for pipewire, not pulseaudio.
 // Pipewire instead DEFAULTS TO THE DEFAULT AUDIO INPUT. THAT'S RETARDED.
 // OH, YOU MISSPELLED THE AUDIO INPUT? FUCK YOU
@@ -2642,9 +2677,14 @@ static std::vector<MergedAudioInputs> parse_audio_inputs(const AudioDevices &aud
             continue;
 
         requested_audio_inputs.push_back(parse_audio_input_arg(audio_input));
+        AudioTrackDescription audio_track_description;
+
         for(AudioInput &request_audio_input : requested_audio_inputs.back().audio_inputs) {
-            if(request_audio_input.type != AudioInputType::DEVICE)
+            if(request_audio_input.type == AudioInputType::APPLICATION) {
+                audio_track_description.applications.push_back(request_audio_input.name);
+                audio_track_description.app_inverse = request_audio_input.inverted;
                 continue;
+            }
 
             bool match = false;
 
@@ -2654,16 +2694,20 @@ static std::vector<MergedAudioInputs> parse_audio_inputs(const AudioDevices &aud
                     _exit(2);
                 }
                 match = true;
+                audio_track_description.devices.push_back("Default output");
             } else if(request_audio_input.name == "default_input") {
                 if(audio_devices.default_input.empty()) {
                     fprintf(stderr, "gsr error: -a default_input was specified but no default audio input is specified in the audio server\n");
                     _exit(2);
                 }
                 match = true;
+                audio_track_description.devices.push_back("Default input");
             } else {
-                const bool name_is_existing_audio_device = get_audio_device_by_name(audio_devices.audio_inputs, request_audio_input.name.c_str()) != nullptr;
-                if(name_is_existing_audio_device)
+                const AudioDevice *audio_device = get_audio_device_by_name(audio_devices.audio_inputs, request_audio_input.name.c_str());
+                if(audio_device) {
                     match = true;
+                    audio_track_description.devices.push_back(audio_device->description);
+                }
             }
 
             if(!match) {
@@ -2678,6 +2722,8 @@ static std::vector<MergedAudioInputs> parse_audio_inputs(const AudioDevices &aud
                 _exit(50);
             }
         }
+
+        requested_audio_inputs.back().track_name = audio_track_description.to_title();
     }
 
     return requested_audio_inputs;
