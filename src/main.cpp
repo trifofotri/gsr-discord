@@ -1375,7 +1375,10 @@ static MergedAudioInputs parse_audio_input_arg(const char *str) {
         AudioInput audio_input;
         audio_input.name.assign(sub, size);
 
-        if(string_starts_with(audio_input.name.c_str(), "app:")) {
+        if(string_starts_with(audio_input.name.c_str(), "name:")) {
+            result.custom_name = audio_input.name.substr(5);
+            return true;
+        } else if(string_starts_with(audio_input.name.c_str(), "app:")) {
             audio_input.name.erase(audio_input.name.begin(), audio_input.name.begin() + 4);
             audio_input.type = AudioInputType::APPLICATION;
             audio_input.inverted = false;
@@ -2635,11 +2638,15 @@ static void match_app_audio_input_to_available_apps(const std::vector<AudioInput
 }
 
 struct AudioTrackDescription {
+    std::optional<std::string> custom_name;
     std::vector<std::string> devices;
     std::vector<std::string> applications;
     bool app_inverse = false;
 
     std::string to_title() const {
+        if(custom_name.has_value()){
+            return custom_name.value();
+        }
         std::string title;
         if(!devices.empty()) {
             title += "Devices: ";
@@ -2680,8 +2687,12 @@ static std::vector<MergedAudioInputs> parse_audio_inputs(const AudioDevices &aud
         if(!audio_input || audio_input[0] == '\0')
             continue;
 
-        requested_audio_inputs.push_back(parse_audio_input_arg(audio_input));
+        MergedAudioInputs merged_inputs = parse_audio_input_arg(audio_input);
+        requested_audio_inputs.push_back(merged_inputs);
         AudioTrackDescription audio_track_description;
+        if(merged_inputs.custom_name.has_value()){
+            audio_track_description.custom_name = merged_inputs.custom_name;
+        }
 
         for(AudioInput &request_audio_input : requested_audio_inputs.back().audio_inputs) {
             if(request_audio_input.type == AudioInputType::APPLICATION) {

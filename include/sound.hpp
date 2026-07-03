@@ -18,6 +18,7 @@
 #ifndef GPU_SCREEN_RECORDER_H
 #define GPU_SCREEN_RECORDER_H
 
+#include <optional>
 #include <vector>
 #include <string>
 
@@ -49,6 +50,7 @@ struct AudioInput {
 };
 
 struct MergedAudioInputs {
+    std::optional<std::string> custom_name;
     std::string track_name;
     std::vector<AudioInput> audio_inputs;
 };
