@@ -520,6 +520,26 @@ void sound_device_close(SoundDevice *device) {
     device->handle = NULL;
 }
 
+void sound_device_flush(SoundDevice *device) {
+    pa_handle *p = (pa_handle*)device->handle;
+    if(!p || !p->stream)
+        return;
+
+    if(pa_stream_get_state(p->stream) != PA_STREAM_READY)
+        return;
+
+    pa_operation *op = pa_stream_flush(p->stream, NULL, NULL);
+    if(!op)
+        return;
+
+    /* The flush operation should finish immediately, the timeout is to not freeze if pulseaudio is in a bad state */
+    const double start_time = clock_get_monotonic_seconds();
+    while(pa_operation_get_state(op) == PA_OPERATION_RUNNING && clock_get_monotonic_seconds() - start_time < 0.1) {
+        pa_mainloop_iterate(p->mainloop, 1, NULL);
+    }
+    pa_operation_unref(op);
+}
+
 int sound_device_read_next_chunk(SoundDevice *device, void **buffer, double timeout_sec, double *latency_seconds) {
     pa_handle *pa = (pa_handle*)device->handle;
     if(pa_sound_device_read(pa, timeout_sec) < 0) {

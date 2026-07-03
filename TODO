@@ -292,9 +292,6 @@ We can use dri2connect/dri3open to get the /dev/dri/card device. Note that this 
 
 Add support for QVBR (QP with target bitrate). Maybe use VBR instead, since nvidia doesn't support QVBR and neither does vulkan.
 
-KDE Plasma Wayland seems to use overlay planes now in non-fullscreen mode(limited to 1 overlay plane per gpu). Check if this is the case in the latest kde on arch linux.
-    If it is, then support it in kms capture.
-
 Check if pipewire audio link-factory is available before attempting to use app audio or merging audio with pipewire.
     Also do the same in supports_app_audio check in gpu-screen-recorder --info output.
 
@@ -427,5 +424,3 @@ Add the option to use application audio with exectable name, or automatically ch
     In the ui it should also list the application name beside the app audio.
 
 Region capture works incorrectly on gnome with hidpi, especially with 150% scaling. Same in gsr ui.
-
-Support overlay planes with kms capture. COSMIC uses an overlay plane for the top panel, so its not visible in the video.

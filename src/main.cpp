@@ -1521,6 +1521,10 @@ static int init_filter_graph(AVCodecContext* audio_codec_context, AVFilterGraph*
         goto fail;
     }
 
+    /* Make sure the sink always outputs frames with the exact amount of samples the audio encoder wants,
+       otherwise the audio encoder rejects the frame and that piece of audio is lost */
+    av_buffersink_set_frame_size(abuffersink_ctx, audio_codec_context->frame_size);
+
     *graph = filter_graph;
     *sink = abuffersink_ctx;
 
@@ -4196,8 +4200,12 @@ int main(int argc, char **argv) {
                 const double audio_fps = (double)audio_track.codec_context->sample_rate / (double)audio_track.codec_context->frame_size;
                 const int64_t timeout_ms = std::round(1000.0 / audio_fps);
                 const double timeout_sec = 1000.0 / audio_fps / 1000.0;
-                bool first_frame = true;
                 int64_t num_received_frames = 0;
+
+                // The sound device is opened before the recording starts, so it can contain old audio from before the recording started.
+                // Discard it so the recording doesn't start with old audio.
+                if(audio_device.sound_device.handle)
+                    sound_device_flush(&audio_device.sound_device);
 
                 while(running) {
                     void *sound_buffer;
@@ -4246,15 +4254,13 @@ int main(int argc, char **argv) {
                     // despite nvidia shadowplay and xbox game bar producing variable frame rate videos.
                     // So we have to make sure we produce frames at the same relative rate as the video.
                     if((num_missing_frames >= 1 && got_audio_data) || num_missing_frames >= 5 || !audio_device.sound_device.handle) {
-                        // TODO:
-                        //audio_track.frame->data[0] = empty_audio;
-                        if(first_frame || num_missing_frames >= 5) {
-                            if(needs_audio_conversion)
-                                swr_convert(swr, &audio_device.frame->data[0], audio_track.codec_context->frame_size, (const uint8_t**)&empty_audio, audio_track.codec_context->frame_size);
-                            else
-                                audio_device.frame->data[0] = empty_audio;
-                        }
-                        first_frame = false;
+                        // Fill the missing frames with silence. Duplicating the previous audio frame to fill the gap instead
+                        // sounds like a stutter and it's especially noticeable at the start of the recording when the audio device
+                        // hasn't started to deliver audio at a stable rate yet, which repeats the first audio frame multiple times.
+                        if(needs_audio_conversion)
+                            swr_convert(swr, &audio_device.frame->data[0], audio_track.codec_context->frame_size, (const uint8_t**)&empty_audio, audio_track.codec_context->frame_size);
+                        else
+                            audio_device.frame->data[0] = empty_audio;
 
                         // TODO: Check if duplicate frame can be saved just by writing it with a different pts instead of sending it again
                         std::lock_guard<std::mutex> lock(audio_filter_mutex);
@@ -4283,12 +4289,20 @@ int main(int argc, char **argv) {
                     if(!audio_device.sound_device.handle) {
                         av_usleep(timeout_ms * 1000);
                     } else if(got_audio_data) {
+                        // The frame has to be made writable again if the frame was already sent to the audio filter above (when filling missing frames)
+                        // because the audio filter only references the frame data instead of copying it. Without this the sent frames data would be
+                        // overwritten with the audio data below, causing the audio to repeat instead of the missing frames being silent.
+                        ret = av_frame_make_writable(audio_device.frame);
+                        if (ret < 0) {
+                            fprintf(stderr, "Failed to make audio frame writable\n");
+                            break;
+                        }
+
                         // TODO: Instead of converting audio, get float audio from alsa. Or does alsa do conversion internally to get this format?
                         if(needs_audio_conversion)
                             swr_convert(swr, &audio_device.frame->data[0], audio_track.codec_context->frame_size, (const uint8_t**)&sound_buffer, audio_track.codec_context->frame_size);
                         else
                             audio_device.frame->data[0] = (uint8_t*)sound_buffer;
-                        first_frame = false;
 
                         std::lock_guard<std::mutex> lock(audio_filter_mutex);
 
