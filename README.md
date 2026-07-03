@@ -291,3 +291,5 @@ This is a known issue. The issue is that nvfbc which is used for screen capture 
 This will be fixed in the future.
 ## Desktop portal capture doesn't work on my AMD GPU on Hyprland
 This is a hyprland bug. Capture the monitor directly with `-w monitor` or use another Wayland compositor.
+## The captured video is laggy when capturing with desktop portal on COSMIC/Wlroots (sway)
+This is a bug in COSMIC and Wlroots. Their desktop portals send frame updates at low framerates (such as 25 fps) instead of the selected framerate (such as 60 fps).
