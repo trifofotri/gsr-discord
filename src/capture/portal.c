@@ -201,7 +201,7 @@ static int gsr_capture_portal_setup_dbus(gsr_capture_portal *self, int *pipewire
     }
 
     fprintf(stderr, "gsr info: gsr_capture_portal_setup_dbus: SelectSources\n");
-    response_status = gsr_dbus_screencast_select_sources(&self->dbus, self->session_handle, GSR_PORTAL_CAPTURE_TYPE_ALL, self->params.record_cursor ? GSR_PORTAL_CURSOR_MODE_EMBEDDED : GSR_PORTAL_CURSOR_MODE_HIDDEN);
+    response_status = gsr_dbus_screencast_select_sources(&self->dbus, self->session_handle, GSR_PORTAL_CAPTURE_TYPE_ALL, self->params.record_cursor ? GSR_PORTAL_CURSOR_MODE_METADATA : GSR_PORTAL_CURSOR_MODE_HIDDEN);
     if(response_status != 0) {
         fprintf(stderr, "gsr error: gsr_capture_portal_setup_dbus: SelectSources failed\n");
         return response_status;
@@ -347,7 +347,10 @@ static void gsr_capture_portal_pre_capture(gsr_capture *cap, gsr_capture_metadat
                 self->capture_size.y = self->pipewire_data.region.height;
                 color_conversion->schedule_clear = true;
             }
-        } else {
+        } else if(self->pipewire_data.texture_width == 0 || !gsr_pipewire_video_update_cursor(&self->pipewire, self->texture_map, &self->pipewire_data.cursor_region)) {
+            /* Theres no new video frame to capture and the cursor hasn't changed (which only happens in cursor metadata mode).
+               If the cursor has changed then the latest video frame is redrawn with the new cursor state, otherwise nothing is captured.
+               This is needed on gnome which doesn't send new video frames when capturing a window and only the cursor moves. */
             return;
         }
     }
@@ -387,9 +390,10 @@ static int gsr_capture_portal_capture(gsr_capture *cap, gsr_capture_metadata *ca
             self->capture_size.y == 0 ? 0 : (double)output_size.y / (double)self->capture_size.y
         };
 
+        /* The cursor position is relative to the video buffer, remove the crop offset to make it relative to the visible video content */
         const vec2i cursor_pos = {
-            target_pos.x + (self->pipewire_data.cursor_region.x * scale.x),
-            target_pos.y + (self->pipewire_data.cursor_region.y * scale.y)
+            target_pos.x + ((self->pipewire_data.cursor_region.x - self->pipewire_data.region.x) * scale.x),
+            target_pos.y + ((self->pipewire_data.cursor_region.y - self->pipewire_data.region.y) * scale.y)
         };
 
         self->params.egl->glEnable(GL_SCISSOR_TEST);

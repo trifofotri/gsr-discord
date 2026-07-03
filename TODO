@@ -187,7 +187,7 @@ Always disable prime run/dri prime and list all monitors to record from from all
         automatically use the associated gpu card.
 
 Allow flv av1 if recent ffmpeg version and streaming to youtube (and twitch?) and for custom services.
-Use explicit sync in pipewire video code: https://docs.pipewire.org/page_dma_buf.html.
+Use explicit sync in pipewire video code: https://docs.pipewire.org/page_dma_buf.html. This should fix cross gpu pipewire capture.
 
 Replay (and recording?) fails to save properly sometimes (especially for long videos). This is noticable with mp4 files since they get corrupt and become unplayable.
     The entire video does seem to get saved (it's a large video file) and it seems to have the correct headers but it's not playable.
@@ -427,3 +427,5 @@ Add the option to use application audio with exectable name, or automatically ch
     In the ui it should also list the application name beside the app audio.
 
 Region capture works incorrectly on gnome with hidpi, especially with 150% scaling. Same in gsr ui.
+
+Support overlay planes with kms capture. COSMIC uses an overlay plane for the top panel, so its not visible in the video.

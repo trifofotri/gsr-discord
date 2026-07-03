@@ -114,32 +114,111 @@ static const struct pw_core_events core_events = {
     .error = on_core_error_cb,
 };
 
+static void gsr_pipewire_video_read_cursor_metadata(gsr_pipewire_video *self, struct spa_buffer *buffer) {
+    const struct spa_meta_cursor *cursor = spa_buffer_find_meta_data(buffer, SPA_META_Cursor, sizeof(*cursor));
+    if(!cursor)
+        return;
+
+    /* The cursor can become invalid when it moves off the captured window/monitor, in which case it should be hidden */
+    const bool cursor_valid = spa_meta_cursor_is_valid(cursor);
+    if(cursor_valid != self->cursor.valid) {
+        self->cursor.updated = true;
+        self->damaged = true;
+    }
+    self->cursor.valid = cursor_valid;
+
+    if(!self->cursor.visible || !self->cursor.valid)
+        return;
+
+    struct spa_meta_bitmap *bitmap = NULL;
+    if(cursor->bitmap_offset)
+        bitmap = SPA_MEMBER(cursor, cursor->bitmap_offset, struct spa_meta_bitmap);
+
+    // TODO: Maybe check if the cursor is actually visible by checking if there are visible pixels
+    if(bitmap && bitmap->size.width > 0 && bitmap->size.height > 0 && is_cursor_format_supported(bitmap->format)) {
+        /* Animated cursors update the bitmap for every animation frame, only log when the size changes */
+        if((int)bitmap->size.width != self->cursor.width || (int)bitmap->size.height != self->cursor.height) {
+            fprintf(stderr, "gsr info: pipewire: cursor bitmap update, size: %dx%d, format: %s\n",
+                (int)bitmap->size.width, (int)bitmap->size.height, spa_debug_type_find_name(spa_type_video_format, bitmap->format));
+        }
+
+        const uint8_t *bitmap_data = SPA_MEMBER(bitmap, bitmap->offset, uint8_t);
+        const size_t bitmap_size = bitmap->size.width * bitmap->size.height * 4;
+        uint8_t *new_bitmap_data = realloc(self->cursor.data, bitmap_size);
+        if(new_bitmap_data) {
+            self->cursor.data = new_bitmap_data;
+            /* TODO: Convert bgr and other image formats to rgb here */
+            memcpy(self->cursor.data, bitmap_data, bitmap_size);
+
+            self->cursor.hotspot_x = cursor->hotspot.x;
+            self->cursor.hotspot_y = cursor->hotspot.y;
+            self->cursor.width = bitmap->size.width;
+            self->cursor.height = bitmap->size.height;
+            self->cursor.updated = true;
+            self->damaged = true;
+        }
+    }
+
+    /* Position changes for a cursor that cant be drawn (no bitmap received yet) shouldn't trigger a redraw */
+    if(self->cursor.width > 0 && (cursor->position.x != self->cursor.x || cursor->position.y != self->cursor.y)) {
+        self->cursor.updated = true;
+        self->damaged = true;
+    }
+
+    self->cursor.x = cursor->position.x;
+    self->cursor.y = cursor->position.y;
+
+    //fprintf(stderr, "gsr info: pipewire: cursor: %d %d %d %d\n", cursor->hotspot.x, cursor->hotspot.y, cursor->position.x, cursor->position.y);
+}
+
+static bool buffer_has_video_content(const struct spa_buffer *buffer) {
+    /* Cursor-only updates in cursor metadata mode are sent as buffers without valid video content
+       (chunk size 0 on gnome, chunk marked as corrupted on kde plasma) */
+    return buffer->n_datas > 0 && buffer->datas[0].chunk->size != 0 && !(buffer->datas[0].chunk->flags & SPA_CHUNK_FLAG_CORRUPTED);
+}
+
 static void on_process_cb(void *user_data) {
     gsr_pipewire_video *self = user_data;
 
-    /* Find the most recent buffer */
+    /* Find the most recent buffer with video content. The cursor metadata is read from all buffers in the order they arrive
+       because a batch of buffers can contain both video buffers and cursor-only buffers (in cursor metadata mode)
+       and a video buffer shouldn't be discarded just because a cursor-only buffer arrived after it. */
+    bool got_buffer = false;
     struct pw_buffer *pw_buf = NULL;
     for(;;) {
         struct pw_buffer *aux = pw_stream_dequeue_buffer(self->stream);
         if(!aux)
             break;
-        if(pw_buf)
-            pw_stream_queue_buffer(self->stream, pw_buf);
-        pw_buf = aux;
+
+        got_buffer = true;
+        pthread_mutex_lock(&self->mutex);
+        gsr_pipewire_video_read_cursor_metadata(self, aux->buffer);
+        pthread_mutex_unlock(&self->mutex);
+
+        if(buffer_has_video_content(aux->buffer)) {
+            if(pw_buf)
+                pw_stream_queue_buffer(self->stream, pw_buf);
+            pw_buf = aux;
+        } else {
+            pw_stream_queue_buffer(self->stream, aux);
+        }
     }
 
-    if(!pw_buf) {
+    if(!got_buffer) {
         fprintf(stderr, "gsr info: pipewire: out of buffers!\n");
         return;
     }
 
+    /* Only cursor-only buffers arrived, theres no new video frame to process */
+    if(!pw_buf)
+        return;
+
     struct spa_buffer *buffer = pw_buf->buffer;
-    const bool has_buffer = buffer->n_datas > 0 && buffer->datas[0].chunk->size != 0;
 
     pthread_mutex_lock(&self->mutex);
 
     bool buffer_updated = false;
-    if(has_buffer && buffer->datas[0].type == SPA_DATA_DmaBuf) {
+    if(buffer->datas[0].type == SPA_DATA_DmaBuf) {
         for(size_t i = 0; i < self->dmabuf_num_planes; ++i) {
             if(self->dmabuf_data[i].fd > 0) {
                 close(self->dmabuf_data[i].fd);
@@ -208,44 +287,6 @@ static void on_process_cb(void *user_data) {
         }
     } else if(buffer_updated) {
         self->damaged = true;
-    }
-
-    const struct spa_meta_cursor *cursor = spa_buffer_find_meta_data(buffer, SPA_META_Cursor, sizeof(*cursor));
-    self->cursor.valid = cursor && spa_meta_cursor_is_valid(cursor);
-    
-    if (self->cursor.visible && self->cursor.valid) {
-        struct spa_meta_bitmap *bitmap = NULL;
-        if (cursor->bitmap_offset)
-            bitmap = SPA_MEMBER(cursor, cursor->bitmap_offset, struct spa_meta_bitmap);
-
-        // TODO: Maybe check if the cursor is actually visible by checking if there are visible pixels
-        if (bitmap && bitmap->size.width > 0 && bitmap->size.height > 0 && is_cursor_format_supported(bitmap->format)) {
-            const uint8_t *bitmap_data = SPA_MEMBER(bitmap, bitmap->offset, uint8_t);
-            fprintf(stderr, "gsr info: pipewire: cursor bitmap update, size: %dx%d, format: %s\n",
-                (int)bitmap->size.width, (int)bitmap->size.height, spa_debug_type_find_name(spa_type_video_format, bitmap->format));
-
-            const size_t bitmap_size = bitmap->size.width * bitmap->size.height * 4;
-            uint8_t *new_bitmap_data = realloc(self->cursor.data, bitmap_size);
-            if(new_bitmap_data) {
-                self->cursor.data = new_bitmap_data;
-                /* TODO: Convert bgr and other image formats to rgb here */
-                memcpy(self->cursor.data, bitmap_data, bitmap_size);
-            }
-        
-            self->cursor.hotspot_x = cursor->hotspot.x;
-            self->cursor.hotspot_y = cursor->hotspot.y;
-            self->cursor.width = bitmap->size.width;
-            self->cursor.height = bitmap->size.height;
-            self->damaged = true;
-        }
-
-        if(cursor->position.x != self->cursor.x || cursor->position.y != self->cursor.y)
-            self->damaged = true;
-
-        self->cursor.x = cursor->position.x;
-        self->cursor.y = cursor->position.y;
-
-        //fprintf(stderr, "gsr info: pipewire: cursor: %d %d %d %d\n", cursor->hotspot.x, cursor->hotspot.y, cursor->position.x, cursor->position.y);
     }
 
     pthread_mutex_unlock(&self->mutex);
@@ -840,15 +881,26 @@ static void gsr_pipewire_video_update_cursor_texture(gsr_pipewire_video *self, g
     self->cursor.data = NULL;
 }
 
-bool gsr_pipewire_video_map_texture(gsr_pipewire_video *self, gsr_texture_map texture_map, gsr_map_texture_output *output) {
-    for(int i = 0; i < GSR_PIPEWIRE_VIDEO_DMABUF_MAX_PLANES; ++i) {
-        memset(&output->dmabuf_data[i], 0, sizeof(gsr_pipewire_video_dmabuf_data));
+static void gsr_pipewire_video_update_cursor_data(gsr_pipewire_video *self, gsr_texture_map texture_map, gsr_pipewire_video_region *cursor_region) {
+    self->cursor.updated = false;
+    gsr_pipewire_video_update_cursor_texture(self, texture_map);
+
+    if(self->cursor.valid) {
+        cursor_region->x = self->cursor.x - self->cursor.hotspot_x;
+        cursor_region->y = self->cursor.y - self->cursor.hotspot_y;
+
+        cursor_region->width = self->cursor.width;
+        cursor_region->height = self->cursor.height;
+    } else {
+        cursor_region->x = 0;
+        cursor_region->y = 0;
+
+        cursor_region->width = 0;
+        cursor_region->height = 0;
     }
-    output->num_dmabuf_data = 0;
-    output->using_external_image = self->external_texture_fallback;
-    output->fourcc = 0;
-    output->modifiers = 0;
-    output->rotation = GSR_MONITOR_ROT_0;
+}
+
+bool gsr_pipewire_video_map_texture(gsr_pipewire_video *self, gsr_texture_map texture_map, gsr_map_texture_output *output) {
     pthread_mutex_lock(&self->mutex);
 
     if(!self->negotiated || !self->streaming || self->dmabuf_data[0].fd <= 0) {
@@ -862,11 +914,15 @@ bool gsr_pipewire_video_map_texture(gsr_pipewire_video *self, gsr_texture_map te
         return false;
     }
 
+    /* |output| is only written to from this point on. When this function returns false the caller
+       can keep using the data from the previous successful call to redraw the previous video frame. */
+    for(int i = 0; i < GSR_PIPEWIRE_VIDEO_DMABUF_MAX_PLANES; ++i) {
+        memset(&output->dmabuf_data[i], 0, sizeof(gsr_pipewire_video_dmabuf_data));
+    }
+
     gsr_pipewire_video_bind_image_to_texture_with_fallback(self, texture_map, image);
     output->using_external_image = self->external_texture_fallback;
     self->egl->eglDestroyImage(self->egl->egl_display, image);
-
-    gsr_pipewire_video_update_cursor_texture(self, texture_map);
 
     output->texture_width = self->format.info.raw.size.width;
     output->texture_height = self->format.info.raw.size.height;
@@ -892,12 +948,7 @@ bool gsr_pipewire_video_map_texture(gsr_pipewire_video *self, gsr_texture_map te
         output->region.height = temp;
     }
 
-    /* TODO: Test if cursor hotspot is correct */
-    output->cursor_region.x = self->cursor.x - self->cursor.hotspot_x;
-    output->cursor_region.y = self->cursor.y - self->cursor.hotspot_y;
-
-    output->cursor_region.width = self->cursor.width;
-    output->cursor_region.height = self->cursor.height;
+    gsr_pipewire_video_update_cursor_data(self, texture_map, &output->cursor_region);
 
     for(size_t i = 0; i < self->dmabuf_num_planes; ++i) {
         output->dmabuf_data[i] = self->dmabuf_data[i];
@@ -908,6 +959,20 @@ bool gsr_pipewire_video_map_texture(gsr_pipewire_video *self, gsr_texture_map te
     output->modifiers = self->format.info.raw.modifier;
     output->rotation = self->rotation;
     self->dmabuf_num_planes = 0;
+
+    pthread_mutex_unlock(&self->mutex);
+    return true;
+}
+
+bool gsr_pipewire_video_update_cursor(gsr_pipewire_video *self, gsr_texture_map texture_map, gsr_pipewire_video_region *cursor_region) {
+    pthread_mutex_lock(&self->mutex);
+
+    if(!self->negotiated || !self->streaming || !self->cursor.updated) {
+        pthread_mutex_unlock(&self->mutex);
+        return false;
+    }
+
+    gsr_pipewire_video_update_cursor_data(self, texture_map, cursor_region);
 
     pthread_mutex_unlock(&self->mutex);
     return true;

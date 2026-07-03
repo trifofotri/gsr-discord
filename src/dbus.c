@@ -650,8 +650,15 @@ int gsr_dbus_screencast_select_sources(gsr_dbus *self, const char *session_handl
     uint32_t available_cursor_modes = 0;
     gsr_dbus_desktop_portal_get_property(self, "org.freedesktop.portal.ScreenCast", "AvailableCursorModes", &available_cursor_modes);
     if(available_cursor_modes == 0)
-        fprintf(stderr, "gsr error: gsr_dbus_screencast_select_sources: no cursors modes are available\n");
+        fprintf(stderr, "gsr warning: gsr_dbus_screencast_select_sources: no cursors modes are available\n");
+
+    if(cursor_mode == GSR_PORTAL_CURSOR_MODE_METADATA && !(available_cursor_modes & GSR_PORTAL_CURSOR_MODE_METADATA)) {
+        fprintf(stderr, "gsr warning: gsr_dbus_screencast_select_sources: cursor mode metadata is not available, using cursor mode embedded instead\n");
+        cursor_mode = GSR_PORTAL_CURSOR_MODE_EMBEDDED;
+    }
     cursor_mode = unset_unsupported_cursor_modes(cursor_mode, available_cursor_modes);
+    if(cursor_mode == 0)
+        cursor_mode = GSR_PORTAL_CURSOR_MODE_HIDDEN;
 
     char handle_token[64];
     gsr_dbus_portal_get_unique_handle_token(self, handle_token, sizeof(handle_token));

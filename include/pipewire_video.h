@@ -85,6 +85,7 @@ typedef struct {
     struct {
         bool visible;
         bool valid;
+        bool updated;
         uint8_t *data;
         int x, y;
         int hotspot_x, hotspot_y;
@@ -126,6 +127,12 @@ bool gsr_pipewire_video_init(gsr_pipewire_video *self, int pipewire_fd, uint32_t
 void gsr_pipewire_video_deinit(gsr_pipewire_video *self);
 
 bool gsr_pipewire_video_map_texture(gsr_pipewire_video *self, gsr_texture_map texture_map, gsr_map_texture_output *output);
+/*
+    Returns true if the cursor has changed (moved, changed image or changed visibility) since the last call to
+    gsr_pipewire_video_map_texture or gsr_pipewire_video_update_cursor. This only happens when the wayland compositor
+    supports cursor metadata mode. |cursor_region| and the cursor texture in |texture_map| are updated with the latest cursor state.
+*/
+bool gsr_pipewire_video_update_cursor(gsr_pipewire_video *self, gsr_texture_map texture_map, gsr_pipewire_video_region *cursor_region);
 bool gsr_pipewire_video_is_damaged(gsr_pipewire_video *self);
 void gsr_pipewire_video_clear_damage(gsr_pipewire_video *self);
 bool gsr_pipewire_video_should_restart(gsr_pipewire_video *self);
