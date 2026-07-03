@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <drm_mode.h>
 
-#define GSR_KMS_PROTOCOL_VERSION 5
+#define GSR_KMS_PROTOCOL_VERSION 6
 
 #define GSR_KMS_MAX_ITEMS 8
 #define GSR_KMS_MAX_DMA_BUFS 4
@@ -46,6 +46,12 @@ typedef enum {
     KMS_ROT_270
 } gsr_kms_rotation;
 
+typedef enum {
+    KMS_PLANE_TYPE_PRIMARY,
+    KMS_PLANE_TYPE_CURSOR,
+    KMS_PLANE_TYPE_OVERLAY
+} gsr_kms_plane_type;
+
 struct gsr_kms_response_item {
     gsr_kms_response_dma_buf dma_buf[GSR_KMS_MAX_DMA_BUFS];
     int num_dma_bufs;
@@ -54,13 +60,20 @@ struct gsr_kms_response_item {
     uint32_t pixel_format;
     uint64_t modifier;
     uint32_t connector_id; /* 0 if unknown */
-    bool is_cursor;
+    gsr_kms_plane_type plane_type;
     bool has_hdr_metadata;
     gsr_kms_rotation rotation;
-    int x;
-    int y;
+    /* The region in the framebuffer that is displayed */
+    int src_x;
+    int src_y;
     int src_w;
     int src_h;
+    /* The region on the monitor (crtc) where the framebuffer region is displayed */
+    int dst_x;
+    int dst_y;
+    int dst_w;
+    int dst_h;
+    int zpos;
     struct hdr_output_metadata hdr_metadata;
 };
 

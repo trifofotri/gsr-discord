@@ -218,7 +218,7 @@ static int gsr_capture_kms_start(gsr_capture *cap, gsr_capture_metadata *capture
 
 static gsr_kms_response_item* find_drm_by_connector_id(gsr_kms_response *kms_response, uint32_t connector_id) {
     for(int i = 0; i < kms_response->num_items; ++i) {
-        if(kms_response->items[i].connector_id == connector_id && !kms_response->items[i].is_cursor)
+        if(kms_response->items[i].connector_id == connector_id && kms_response->items[i].plane_type == KMS_PLANE_TYPE_PRIMARY)
             return &kms_response->items[i];
     }
     return NULL;
@@ -232,7 +232,7 @@ static gsr_kms_response_item* find_largest_drm(gsr_kms_response *kms_response) {
     gsr_kms_response_item *largest_drm = &kms_response->items[0];
     for(int i = 0; i < kms_response->num_items; ++i) {
         const int64_t size = (int64_t)kms_response->items[i].width * (int64_t)kms_response->items[i].height;
-        if(size > largest_size && !kms_response->items[i].is_cursor) {
+        if(size > largest_size && kms_response->items[i].plane_type == KMS_PLANE_TYPE_PRIMARY) {
             largest_size = size;
             largest_drm = &kms_response->items[i];
         }
@@ -243,7 +243,7 @@ static gsr_kms_response_item* find_largest_drm(gsr_kms_response *kms_response) {
 static gsr_kms_response_item* find_cursor_drm(gsr_kms_response *kms_response, uint32_t connector_id) {
     gsr_kms_response_item *cursor_drm = NULL;
     for(int i = 0; i < kms_response->num_items; ++i) {
-        if(kms_response->items[i].is_cursor) {
+        if(kms_response->items[i].plane_type == KMS_PLANE_TYPE_CURSOR) {
             cursor_drm = &kms_response->items[i];
             if(kms_response->items[i].connector_id == connector_id)
                 break;
@@ -406,7 +406,7 @@ static void render_drm_cursor(gsr_capture_kms *self, gsr_color_conversion *color
     const gsr_monitor_rotation cursor_plane_rotation = kms_rotation_to_gsr_monitor_rotation(cursor_drm_fd->rotation);
     const gsr_monitor_rotation rotation = sub_rotations(self->display_server_monitor_rotation, cursor_plane_rotation);
 
-    vec2i cursor_pos = {cursor_drm_fd->x, cursor_drm_fd->y};
+    vec2i cursor_pos = {cursor_drm_fd->dst_x, cursor_drm_fd->dst_y};
     switch(rotation) {
         case GSR_MONITOR_ROT_0:
             break;
@@ -584,22 +584,13 @@ static void gsr_capture_kms_pre_capture(gsr_capture *cap, gsr_capture_metadata *
     gsr_capture_kms_update_capture_size_change(self, color_conversion, self->target_pos, self->drm_fd);
 }
 
-static int gsr_capture_kms_capture(gsr_capture *cap, gsr_capture_metadata *capture_metadata, gsr_color_conversion *color_conversion) {
-    (void)capture_metadata;
-    gsr_capture_kms *self = cap->priv;
-
-    if(!self->drm_fd || self->params.kms_response->num_items == 0)
-        return -1;
-
+static void render_monitor_plane(gsr_capture_kms *self, gsr_color_conversion *color_conversion, gsr_capture_metadata *capture_metadata) {
     vec2i capture_pos = self->capture_pos;
     if(!self->capture_is_combined_plane)
-        capture_pos = (vec2i){self->drm_fd->x, self->drm_fd->y};
+        capture_pos = (vec2i){self->drm_fd->src_x, self->drm_fd->src_y};
 
     capture_pos.x += self->params.region_position.x;
     capture_pos.y += self->params.region_position.y;
-
-    //self->params.egl->glFlush();
-    //self->params.egl->glFinish();
 
     EGLImage image = gsr_capture_kms_create_egl_image_with_fallback(self, self->drm_fd);
     if(image) {
@@ -611,6 +602,110 @@ static int gsr_capture_kms_capture(gsr_capture *cap, gsr_capture_metadata *captu
         self->target_pos, self->output_size,
         capture_pos, self->capture_size, (vec2i){ self->drm_fd->width, self->drm_fd->height },
         gsr_monitor_rotation_to_rotation(self->final_monitor_rotation), capture_metadata->flip, GSR_SOURCE_COLOR_RGB, self->external_texture_fallback);
+}
+
+/* Renders an overlay plane on top of (or below, depending on render order) the monitor plane, scaled to the output */
+static void render_drm_plane(gsr_capture_kms *self, gsr_color_conversion *color_conversion, gsr_capture_metadata *capture_metadata, const gsr_kms_response_item *plane_drm_fd, vec2i target_pos, vec2i output_size, vec2i framebuffer_size) {
+    const vec2d scale = {
+        self->capture_size.x == 0 ? 0 : (double)output_size.x / (double)self->capture_size.x,
+        self->capture_size.y == 0 ? 0 : (double)output_size.y / (double)self->capture_size.y
+    };
+
+    const gsr_monitor_rotation plane_rotation = kms_rotation_to_gsr_monitor_rotation(plane_drm_fd->rotation);
+    const gsr_monitor_rotation rotation = sub_rotations(self->display_server_monitor_rotation, plane_rotation);
+
+    const vec2i plane_size = {plane_drm_fd->dst_w, plane_drm_fd->dst_h};
+    vec2i plane_pos = {plane_drm_fd->dst_x, plane_drm_fd->dst_y};
+    switch(rotation) {
+        case GSR_MONITOR_ROT_0:
+            break;
+        case GSR_MONITOR_ROT_90:
+            plane_pos = swap_vec2i(plane_pos);
+            plane_pos.x = framebuffer_size.x - plane_pos.x;
+            // TODO: Remove this horrible hack
+            plane_pos.x -= plane_size.x;
+            break;
+        case GSR_MONITOR_ROT_180:
+            plane_pos.x = framebuffer_size.x - plane_pos.x;
+            plane_pos.y = framebuffer_size.y - plane_pos.y;
+            // TODO: Remove this horrible hack
+            plane_pos.x -= plane_size.x;
+            plane_pos.y -= plane_size.y;
+            break;
+        case GSR_MONITOR_ROT_270:
+            plane_pos = swap_vec2i(plane_pos);
+            plane_pos.y = framebuffer_size.y - plane_pos.y;
+            // TODO: Remove this horrible hack
+            plane_pos.y -= plane_size.y;
+            break;
+    }
+
+    plane_pos.x -= self->params.region_position.x;
+    plane_pos.y -= self->params.region_position.y;
+
+    plane_pos.x *= scale.x;
+    plane_pos.y *= scale.y;
+
+    plane_pos.x += target_pos.x;
+    plane_pos.y += target_pos.y;
+
+    EGLImage image = gsr_capture_kms_create_egl_image_with_fallback(self, plane_drm_fd);
+    if(!image)
+        return;
+
+    gsr_capture_kms_bind_image_to_input_texture_with_fallback(self, image);
+    self->params.egl->eglDestroyImage(self->params.egl->egl_display, image);
+
+    self->params.egl->glEnable(GL_SCISSOR_TEST);
+    self->params.egl->glScissor(target_pos.x, target_pos.y, output_size.x, output_size.y);
+
+    gsr_color_conversion_draw(color_conversion, self->external_texture_fallback ? self->external_input_texture_id : self->input_texture_id,
+        plane_pos, (vec2i){plane_size.x * scale.x, plane_size.y * scale.y},
+        (vec2i){plane_drm_fd->src_x, plane_drm_fd->src_y}, (vec2i){plane_drm_fd->src_w, plane_drm_fd->src_h}, (vec2i){plane_drm_fd->width, plane_drm_fd->height},
+        gsr_monitor_rotation_to_rotation(rotation), capture_metadata->flip, GSR_SOURCE_COLOR_RGB, self->external_texture_fallback);
+
+    self->params.egl->glDisable(GL_SCISSOR_TEST);
+}
+
+static int gsr_capture_kms_capture(gsr_capture *cap, gsr_capture_metadata *capture_metadata, gsr_color_conversion *color_conversion) {
+    gsr_capture_kms *self = cap->priv;
+
+    if(!self->drm_fd || self->params.kms_response->num_items == 0)
+        return -1;
+
+    const vec2i framebuffer_size = rotate_capture_size_if_rotated(self, (vec2i){ self->drm_fd->src_w, self->drm_fd->src_h }, self->final_monitor_rotation);
+
+    //self->params.egl->glFlush();
+    //self->params.egl->glFinish();
+
+    /* Gather all planes that are displayed on the captured monitor. Overlay planes are not used on x11 (combined plane) */
+    const gsr_kms_response_item *planes[GSR_KMS_MAX_ITEMS];
+    int num_planes = 0;
+    planes[num_planes++] = self->drm_fd;
+    if(!self->capture_is_combined_plane) {
+        for(int i = 0; i < self->params.kms_response->num_items && num_planes < GSR_KMS_MAX_ITEMS; ++i) {
+            const gsr_kms_response_item *item = &self->params.kms_response->items[i];
+            if(item->plane_type == KMS_PLANE_TYPE_OVERLAY && item->connector_id == self->drm_fd->connector_id)
+                planes[num_planes++] = item;
+        }
+    }
+
+    /* Sort the planes by zpos, from bottom to top. Insertion sort to keep planes with the same zpos in the order the drm driver returned them (stable) */
+    for(int i = 1; i < num_planes; ++i) {
+        const gsr_kms_response_item *plane = planes[i];
+        int j = i - 1;
+        for(; j >= 0 && planes[j]->zpos > plane->zpos; --j) {
+            planes[j + 1] = planes[j];
+        }
+        planes[j + 1] = plane;
+    }
+
+    for(int i = 0; i < num_planes; ++i) {
+        if(planes[i] == self->drm_fd)
+            render_monitor_plane(self, color_conversion, capture_metadata);
+        else
+            render_drm_plane(self, color_conversion, capture_metadata, planes[i], self->target_pos, self->output_size, framebuffer_size);
+    }
 
     if(self->params.record_cursor) {
         gsr_kms_response_item *cursor_drm_fd = find_cursor_drm_if_on_monitor(self, self->drm_fd->connector_id, self->capture_is_combined_plane);
@@ -624,7 +719,6 @@ static int gsr_capture_kms_capture(gsr_capture *cap, gsr_capture_metadata *captu
             cursor_monitor_offset.y += self->params.region_position.y;
             render_x11_cursor(self, color_conversion, capture_metadata, cursor_monitor_offset, self->target_pos, self->output_size);
         } else if(cursor_drm_fd) {
-            const vec2i framebuffer_size = rotate_capture_size_if_rotated(self, (vec2i){ self->drm_fd->src_w, self->drm_fd->src_h }, self->final_monitor_rotation);
             render_drm_cursor(self, color_conversion, capture_metadata, cursor_drm_fd, self->target_pos, self->output_size, framebuffer_size);
         }
     }

@@ -145,17 +145,23 @@ typedef enum {
     PLANE_PROPERTY_IS_CURSOR  = 1 << 6,
     PLANE_PROPERTY_IS_PRIMARY = 1 << 7,
     PLANE_PROPERTY_ROTATION   = 1 << 8,
+    PLANE_PROPERTY_W          = 1 << 9,
+    PLANE_PROPERTY_H          = 1 << 10,
+    PLANE_PROPERTY_IS_OVERLAY = 1 << 11,
+    PLANE_PROPERTY_ZPOS       = 1 << 12,
 } plane_property_mask;
 
+typedef struct {
+    int x, y, w, h;             /* Region on the crtc (monitor) where the plane is displayed (CRTC_* properties) */
+    int src_x, src_y, src_w, src_h; /* Region in the framebuffer that is displayed (SRC_* properties) */
+    int zpos;
+    gsr_kms_rotation rotation;
+} plane_properties;
+
 /* Returns plane_property_mask */
-static uint32_t plane_get_properties(int drmfd, uint32_t plane_id, int *x, int *y, int *src_x, int *src_y, int *src_w, int *src_h, gsr_kms_rotation *rotation) {
-    *x = 0;
-    *y = 0;
-    *src_x = 0;
-    *src_y = 0;
-    *src_w = 0;
-    *src_h = 0;
-    *rotation = KMS_ROT_0;
+static uint32_t plane_get_properties(int drmfd, uint32_t plane_id, plane_properties *properties) {
+    memset(properties, 0, sizeof(*properties));
+    properties->rotation = KMS_ROT_0;
 
     plane_property_mask property_mask = 0;
 
@@ -172,23 +178,35 @@ static uint32_t plane_get_properties(int drmfd, uint32_t plane_id, int *x, int *
         // SRC_* values are fixed 16.16 points
         const uint32_t type = prop->flags & (DRM_MODE_PROP_LEGACY_TYPE | DRM_MODE_PROP_EXTENDED_TYPE);
         if((type & DRM_MODE_PROP_SIGNED_RANGE) && strcmp(prop->name, "CRTC_X") == 0) {
-            *x = (int)props->prop_values[i];
+            properties->x = (int)props->prop_values[i];
             property_mask |= PLANE_PROPERTY_X;
         } else if((type & DRM_MODE_PROP_SIGNED_RANGE) && strcmp(prop->name, "CRTC_Y") == 0) {
-            *y = (int)props->prop_values[i];
+            properties->y = (int)props->prop_values[i];
             property_mask |= PLANE_PROPERTY_Y;
+        } else if((type & DRM_MODE_PROP_RANGE) && strcmp(prop->name, "CRTC_W") == 0) {
+            properties->w = (int)props->prop_values[i];
+            property_mask |= PLANE_PROPERTY_W;
+        } else if((type & DRM_MODE_PROP_RANGE) && strcmp(prop->name, "CRTC_H") == 0) {
+            properties->h = (int)props->prop_values[i];
+            property_mask |= PLANE_PROPERTY_H;
         } else if((type & DRM_MODE_PROP_RANGE) && strcmp(prop->name, "SRC_X") == 0) {
-            *src_x = (int)(props->prop_values[i] >> 16);
+            properties->src_x = (int)(props->prop_values[i] >> 16);
             property_mask |= PLANE_PROPERTY_SRC_X;
         } else if((type & DRM_MODE_PROP_RANGE) && strcmp(prop->name, "SRC_Y") == 0) {
-            *src_y = (int)(props->prop_values[i] >> 16);
+            properties->src_y = (int)(props->prop_values[i] >> 16);
             property_mask |= PLANE_PROPERTY_SRC_Y;
         } else if((type & DRM_MODE_PROP_RANGE) && strcmp(prop->name, "SRC_W") == 0) {
-            *src_w = (int)(props->prop_values[i] >> 16);
+            properties->src_w = (int)(props->prop_values[i] >> 16);
             property_mask |= PLANE_PROPERTY_SRC_W;
         } else if((type & DRM_MODE_PROP_RANGE) && strcmp(prop->name, "SRC_H") == 0) {
-            *src_h = (int)(props->prop_values[i] >> 16);
+            properties->src_h = (int)(props->prop_values[i] >> 16);
             property_mask |= PLANE_PROPERTY_SRC_H;
+        } else if(((type & DRM_MODE_PROP_RANGE) || (type & DRM_MODE_PROP_SIGNED_RANGE)) && (strcmp(prop->name, "zpos") == 0 || strcmp(prop->name, "ZPOS") == 0)) {
+            if(type & DRM_MODE_PROP_SIGNED_RANGE)
+                properties->zpos = (int)(int64_t)props->prop_values[i];
+            else
+                properties->zpos = (int)props->prop_values[i];
+            property_mask |= PLANE_PROPERTY_ZPOS;
         } else if((type & DRM_MODE_PROP_ENUM) && strcmp(prop->name, "type") == 0) {
             const uint64_t current_enum_value = props->prop_values[i];
             for(int j = 0; j < prop->count_enums; ++j) {
@@ -198,17 +216,20 @@ static uint32_t plane_get_properties(int drmfd, uint32_t plane_id, int *x, int *
                 } else if(prop->enums[j].value == current_enum_value && strcmp(prop->enums[j].name, "Cursor") == 0) {
                     property_mask |= PLANE_PROPERTY_IS_CURSOR;
                     break;
+                } else if(prop->enums[j].value == current_enum_value && strcmp(prop->enums[j].name, "Overlay") == 0) {
+                    property_mask |= PLANE_PROPERTY_IS_OVERLAY;
+                    break;
                 }
             }
         } else if((type & DRM_MODE_PROP_BITMASK) && strcmp(prop->name, "rotation") == 0) {
             const uint64_t rotation_bitmask = props->prop_values[i];
-            *rotation = KMS_ROT_0;
+            properties->rotation = KMS_ROT_0;
             if(rotation_bitmask & 2)
-                *rotation = (*rotation + KMS_ROT_90) % 4;
+                properties->rotation = (properties->rotation + KMS_ROT_90) % 4;
             if(rotation_bitmask & 4)
-                *rotation = (*rotation + KMS_ROT_180) % 4;
+                properties->rotation = (properties->rotation + KMS_ROT_180) % 4;
             if(rotation_bitmask & 8)
-                *rotation = (*rotation + KMS_ROT_270) % 4;
+                properties->rotation = (properties->rotation + KMS_ROT_270) % 4;
         }
 
         drmModeFreeProperty(prop);
@@ -350,11 +371,41 @@ static int kms_get_fb(gsr_drm *drm, gsr_kms_response *response) {
         // TODO: Check if dimensions have changed by comparing width and height to previous time this was called.
         // TODO: Support other plane formats than rgb (with multiple planes, such as direct YUV420 on wayland).
 
-        int x = 0, y = 0, src_x = 0, src_y = 0, src_w = 0, src_h = 0;
-        gsr_kms_rotation rotation = KMS_ROT_0;
-        const uint32_t property_mask = plane_get_properties(drm->drmfd, plane->plane_id, &x, &y, &src_x, &src_y, &src_w, &src_h, &rotation);
-        if(!(property_mask & PLANE_PROPERTY_IS_PRIMARY) && !(property_mask & PLANE_PROPERTY_IS_CURSOR))
+        plane_properties properties;
+        const uint32_t property_mask = plane_get_properties(drm->drmfd, plane->plane_id, &properties);
+        if(!(property_mask & (PLANE_PROPERTY_IS_PRIMARY | PLANE_PROPERTY_IS_CURSOR | PLANE_PROPERTY_IS_OVERLAY)))
             goto cleanup_handles;
+
+        gsr_kms_plane_type plane_type = KMS_PLANE_TYPE_OVERLAY;
+        if(property_mask & PLANE_PROPERTY_IS_PRIMARY)
+            plane_type = KMS_PLANE_TYPE_PRIMARY;
+        else if(property_mask & PLANE_PROPERTY_IS_CURSOR)
+            plane_type = KMS_PLANE_TYPE_CURSOR;
+
+        /* These properties are not available when the drm driver doesn't support atomic modesetting */
+        if(!(property_mask & PLANE_PROPERTY_SRC_W))
+            properties.src_w = drmfb->width;
+        if(!(property_mask & PLANE_PROPERTY_SRC_H))
+            properties.src_h = drmfb->height;
+        if(!(property_mask & PLANE_PROPERTY_W))
+            properties.w = properties.src_w;
+        if(!(property_mask & PLANE_PROPERTY_H))
+            properties.h = properties.src_h;
+
+        /* Not all drm drivers support zpos. In that case assume that the planes are stacked in the order primary, overlay, cursor (bottom to top) */
+        if(!(property_mask & PLANE_PROPERTY_ZPOS)) {
+            switch(plane_type) {
+                case KMS_PLANE_TYPE_PRIMARY:
+                    properties.zpos = 0;
+                    break;
+                case KMS_PLANE_TYPE_OVERLAY:
+                    properties.zpos = 1;
+                    break;
+                case KMS_PLANE_TYPE_CURSOR:
+                    properties.zpos = 2;
+                    break;
+            }
+        }
 
         int fb_fds[GSR_KMS_MAX_DMA_BUFS];
         const int num_fb_fds = drm_prime_handles_to_fds(drm, drmfb, fb_fds);
@@ -386,19 +437,17 @@ static int kms_get_fb(gsr_drm *drm, gsr_kms_response *response) {
         response->items[item_index].pixel_format = drmfb->pixel_format;
         response->items[item_index].modifier = drmfb->flags & DRM_MODE_FB_MODIFIERS ? drmfb->modifier : DRM_FORMAT_MOD_INVALID;
         response->items[item_index].connector_id = crtc_pair ? crtc_pair->connector_id : 0;
-        response->items[item_index].rotation = rotation;
-        response->items[item_index].is_cursor = property_mask & PLANE_PROPERTY_IS_CURSOR;
-        if(property_mask & PLANE_PROPERTY_IS_CURSOR) {
-            response->items[item_index].x = x;
-            response->items[item_index].y = y;
-            response->items[item_index].src_w = 0;
-            response->items[item_index].src_h = 0;
-        } else {
-            response->items[item_index].x = src_x;
-            response->items[item_index].y = src_y;
-            response->items[item_index].src_w = src_w;
-            response->items[item_index].src_h = src_h;
-        }
+        response->items[item_index].rotation = properties.rotation;
+        response->items[item_index].plane_type = plane_type;
+        response->items[item_index].src_x = properties.src_x;
+        response->items[item_index].src_y = properties.src_y;
+        response->items[item_index].src_w = properties.src_w;
+        response->items[item_index].src_h = properties.src_h;
+        response->items[item_index].dst_x = properties.x;
+        response->items[item_index].dst_y = properties.y;
+        response->items[item_index].dst_w = properties.w;
+        response->items[item_index].dst_h = properties.h;
+        response->items[item_index].zpos = properties.zpos;
         ++response->num_items;
 
         cleanup_handles:
