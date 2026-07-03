@@ -293,3 +293,5 @@ This will be fixed in the future.
 This is a hyprland bug. Capture the monitor directly with `-w monitor` or use another Wayland compositor.
 ## The captured video is laggy when capturing with desktop portal on COSMIC/Wlroots (sway)
 This is a bug in COSMIC and Wlroots. Their desktop portals send frame updates at low framerates (such as 25 fps) instead of the selected framerate (such as 60 fps). Capture a monitor directly instead (`-w DP-1` for example) to workaround that problem.
+## How to adjust the volume of the recorded audio?
+GPU Screen Recorder doesn't have the option to do that yet, but you can change the volume by starting recording and then open `pavucontrol`, go to the `Recording` tab and set the volume there. The system will remember the settings even after reboot, as long as the audio capture options remain the same.
