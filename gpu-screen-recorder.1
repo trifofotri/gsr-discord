@@ -382,6 +382,9 @@ when this is set to
 .B yes
 to only encode frames when the screen content updates to lower GPU and video encoding usage when the system is idle.
 .TP
+.BI \-exclude-metadata " yes|no"
+Exclude personal metadata from the video file, such as audio track title that is composed from the name of the audio device by default (default: no).
+.TP
 .BI \-write\-first\-frame\-ts " yes|no"
 When enabled, writes a timestamp file with extra extension \fI.ts\fR next to the output video containing:
 .nf

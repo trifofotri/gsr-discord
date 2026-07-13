@@ -204,7 +204,7 @@ static void usage_header(void) {
            "[-cursor yes|no] [-keyint <value>] [-restore-portal-session yes|no] [-portal-session-token-filepath filepath] [-encoder gpu|cpu] "
            "[-fallback-cpu-encoding yes|no] [-o <output_file>] [-ro <output_directory>] [-ffmpeg-opts <options>] [--list-capture-options [card_path]] "
            "[--list-monitors] [--list-audio-devices] [--list-application-audio] [--list-v4l2-devices] [-write-first-frame-ts yes|no] [-low-power yes|no] "
-           "[-v yes|no] [-gl-debug yes|no] [--version] [-h|--help]\n", program_name);
+           "[-v yes|no] [-gl-debug yes|no] [-exclude-metadata yes|no] [--version] [-h|--help]\n", program_name);
     fflush(stdout);
 }
 
@@ -272,6 +272,7 @@ static bool args_parser_set_values(args_parser *self) {
     self->fallback_cpu_encoding = args_get_boolean_by_key(self->args, NUM_ARGS, "-fallback-cpu-encoding", false);
     self->write_first_frame_ts = args_get_boolean_by_key(self->args, NUM_ARGS, "-write-first-frame-ts", false);
     self->low_power = args_get_boolean_by_key(self->args, NUM_ARGS, "-low-power", false);
+    self->exclude_metadata = args_get_boolean_by_key(self->args, NUM_ARGS, "-exclude-metadata", false);
 
     self->audio_bitrate = args_get_i64_by_key(self->args, NUM_ARGS, "-ab", 0);
     self->audio_bitrate *= 1000LL;
@@ -567,6 +568,7 @@ bool args_parser_parse(args_parser *self, int argc, char **argv, const args_hand
     self->args[arg_index++] = (Arg){ .key = "-ffmpeg-audio-opts",             .optional = true,  .list = false, .type = ARG_TYPE_STRING };
     self->args[arg_index++] = (Arg){ .key = "-write-first-frame-ts",          .optional = true,  .list = false, .type = ARG_TYPE_BOOLEAN };
     self->args[arg_index++] = (Arg){ .key = "-low-power",                     .optional = true,  .list = false, .type = ARG_TYPE_BOOLEAN };
+    self->args[arg_index++] = (Arg){ .key = "-exclude-metadata",              .optional = true,  .list = false, .type = ARG_TYPE_BOOLEAN };
     assert(arg_index == NUM_ARGS);
 
     for(int i = 1; i < argc; i += 2) {

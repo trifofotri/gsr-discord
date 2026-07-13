@@ -1116,7 +1116,7 @@ static RecordingStartResult start_recording_create_streams(const char *filename,
 
     for(const AudioTrack &audio_track : audio_tracks) {
         AVStream *audio_stream = create_stream(av_format_context, audio_track.codec_context);
-        if(!audio_track.name.empty())
+        if(!audio_track.name.empty() && !arg_parser.exclude_metadata)
             av_dict_set(&audio_stream->metadata, "title", audio_track.name.c_str(), 0);
         avcodec_parameters_from_context(audio_stream->codecpar, audio_track.codec_context);
         result.audio_inputs.push_back({&audio_track, audio_stream});
@@ -4081,7 +4081,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "gsr error: added too many audio sources\n");
         }
 
-        if(audio_stream && !merged_audio_inputs.track_name.empty())
+        if(audio_stream && !merged_audio_inputs.track_name.empty() && !arg_parser.exclude_metadata)
             av_dict_set(&audio_stream->metadata, "title", merged_audio_inputs.track_name.c_str(), 0);
 
         open_audio(audio_codec_context, arg_parser.ffmpeg_audio_opts);

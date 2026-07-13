@@ -8,7 +8,7 @@
 
 typedef struct gsr_egl gsr_egl;
 
-#define NUM_ARGS 37
+#define NUM_ARGS 38
 
 typedef enum {
     GSR_CAPTURE_SOURCE_TYPE_WINDOW,
@@ -93,6 +93,7 @@ typedef struct {
     bool gl_debug;
     bool fallback_cpu_encoding;
     bool low_power;
+    bool exclude_metadata;
     bool record_cursor;
     bool date_folders;
     bool restore_portal_session;
