@@ -182,13 +182,15 @@ static int gsr_capture_kms_start(gsr_capture *cap, gsr_capture_metadata *capture
     else
         self->capture_size = rotate_capture_size_if_rotated(self, monitor.size, self->display_server_monitor_rotation);
 
+    vec2i capture_size = self->capture_size;
+    if(self->params.region_size.x > 0 && self->params.region_size.y > 0)
+        capture_size = self->params.region_size;
+
     if(self->params.output_resolution.x > 0 && self->params.output_resolution.y > 0) {
-        self->params.output_resolution = scale_keep_aspect_ratio(self->capture_size, self->params.output_resolution);
+        self->params.output_resolution = scale_keep_aspect_ratio(capture_size, self->params.output_resolution);
         capture_metadata->video_size = self->params.output_resolution;
-    } else if(self->params.region_size.x > 0 && self->params.region_size.y > 0) {
-        capture_metadata->video_size = self->params.region_size;
     } else {
-        capture_metadata->video_size = self->capture_size;
+        capture_metadata->video_size = capture_size;
     }
 
     self->last_time_monitor_check = clock_get_monotonic_seconds();

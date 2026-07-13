@@ -98,8 +98,11 @@ static int gsr_capture_xcomposite_start(gsr_capture *cap, gsr_capture_metadata *
 
     if(self->params.output_resolution.x == 0 && self->params.output_resolution.y == 0) {
         capture_metadata->video_size = self->texture_size;
-    } else {
+    } else if(self->params.follow_focused) {
+        /* The video size has to stay the same even when the focused window changes, so it cant be based on the size of the captured window */
         capture_metadata->video_size = self->params.output_resolution;
+    } else {
+        capture_metadata->video_size = scale_keep_aspect_ratio(self->texture_size, self->params.output_resolution);
     }
 
     self->window_resize_timer = clock_get_monotonic_seconds();

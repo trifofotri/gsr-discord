@@ -599,6 +599,12 @@ vec2i scale_keep_aspect_ratio(vec2i from, vec2i to) {
         from.x = from.y * width_height_ratio;
     }
 
+    /* An extreme aspect ratio can cause a dimension to truncate to 0, which the video encoder cant handle */
+    if(from.x < 1)
+        from.x = 1;
+    if(from.y < 1)
+        from.y = 1;
+
     return from;
 }
 

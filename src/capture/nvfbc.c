@@ -287,11 +287,12 @@ static int gsr_capture_nvfbc_start(gsr_capture *cap, gsr_capture_metadata *captu
     capture_metadata->video_size.x = self->tracking_width;
     capture_metadata->video_size.y = self->tracking_height;
 
+    if(self->params.region_size.x > 0 && self->params.region_size.y > 0)
+        capture_metadata->video_size = self->params.region_size;
+
     if(self->params.output_resolution.x > 0 && self->params.output_resolution.y > 0) {
         self->params.output_resolution = scale_keep_aspect_ratio(capture_metadata->video_size, self->params.output_resolution);
         capture_metadata->video_size = self->params.output_resolution;
-    } else if(self->params.region_size.x > 0 && self->params.region_size.y > 0) {
-        capture_metadata->video_size = self->params.region_size;
     }
 
     return 0;

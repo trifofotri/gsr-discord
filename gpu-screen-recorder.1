@@ -219,9 +219,12 @@ Container format (mp4, mkv, flv, webm). Defaults to extension from
 filename.
 .TP
 .BI \-s " WxH"
-Output resolution limit (e.g., 1920x1080). Use 0x0 for original resolution.
+Output resolution limit (e.g., 1920x1080). The captured content is scaled to fit within this
+resolution while keeping its aspect ratio and the video size shrinks to fit the scaled content.
+Use 0x0 for original resolution.
 Required for
-.BR \-w " focused."
+.BR \-w " focused"
+(where the video is exactly this resolution).
 .TP
 .BI \-f " fps"
 Frame rate (default: 60). For variable frame rate mode, this is maximum FPS.
