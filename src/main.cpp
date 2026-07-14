@@ -2124,6 +2124,8 @@ static std::string get_monitor_by_region_center(const gsr_egl *egl, vec2i region
 static gsr_kms_client kms_client;
 static bool kms_client_initialized = false;
 static gsr_kms_response kms_response;
+static gsr_kde_night_light *kde_night_light = nullptr;
+static bool kde_night_light_initialized = false;
 
 static gsr_cursor x11_cursor;
 static Display *x11_cursor_display = NULL;
@@ -2150,11 +2152,17 @@ static gsr_capture* create_monitor_capture(const args_parser &arg_parser, gsr_eg
                 _exit(kms_init_res < 0 ? 1 : kms_init_res);
         }
 
+        if(!kde_night_light_initialized && gsr_window_get_display_server(egl->window) == GSR_DISPLAY_SERVER_WAYLAND) {
+            kde_night_light_initialized = true;
+            kde_night_light = gsr_kde_night_light_create();
+        }
+
         gsr_capture_kms_params kms_params;
         memset(&kms_params, 0, sizeof(kms_params));
         kms_params.egl = egl;
         kms_params.x11_cursor = &x11_cursor;
         kms_params.kms_response = &kms_response;
+        kms_params.kde_night_light = kde_night_light;
         kms_params.display_to_capture = capture_source.name.c_str();
         kms_params.record_cursor = arg_parser.record_cursor;
         kms_params.hdr = video_codec_is_hdr(arg_parser.video_codec);
@@ -4788,6 +4796,8 @@ int main(int argc, char **argv) {
         gsr_capture_kms_cleanup_kms_fds();
         gsr_kms_client_deinit(&kms_client);
     }
+
+    gsr_kde_night_light_destroy(kde_night_light);
 
     if(!arg_parser.is_replaying && arg_parser.recording_saved_script)
         run_recording_saved_script_async(arg_parser.recording_saved_script, arg_parser.filename, "regular");

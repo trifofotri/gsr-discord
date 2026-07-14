@@ -58,7 +58,6 @@ typedef struct {
     uint32_t gamma_lut_property_id;
     uint64_t gamma_lut_blob_id;
 
-    gsr_kde_night_light *kde_night_light;
     bool night_light_message_shown;
     bool hdr_luminance_message_shown;
     float hdr_video_max_luminance;
@@ -99,11 +98,6 @@ static void gsr_capture_kms_stop(gsr_capture_kms *self) {
     if(self->drm_card_fd > 0) {
         close(self->drm_card_fd);
         self->drm_card_fd = -1;
-    }
-
-    if(self->kde_night_light) {
-        gsr_kde_night_light_destroy(self->kde_night_light);
-        self->kde_night_light = NULL;
     }
 
     // if(self->drm_fd > 0) {
@@ -184,8 +178,6 @@ static int gsr_capture_kms_start(gsr_capture *cap, gsr_capture_metadata *capture
 
     self->is_x11 = gsr_window_get_display_server(self->params.egl->window) == GSR_DISPLAY_SERVER_X11;
     const gsr_connection_type connection_type = self->is_x11 ? GSR_CONNECTION_X11 : GSR_CONNECTION_DRM;
-    if(!self->is_x11)
-        self->kde_night_light = gsr_kde_night_light_create();
 
     MonitorCallbackUserdata monitor_callback_userdata = {
         &self->monitor_id,
@@ -429,7 +421,7 @@ static void gsr_capture_kms_update_hdr_color_transforms(gsr_capture_kms *self, g
     gsr_color_conversion_enable_gamma_lut(color_conversion, plane_is_hdr && self->gamma_lut_blob_id != 0);
 
     float night_light_matrix[9];
-    const bool night_light = self->kde_night_light && gsr_kde_night_light_get_inverse_matrix(self->kde_night_light, night_light_matrix);
+    const bool night_light = self->params.kde_night_light && gsr_kde_night_light_get_inverse_matrix(self->params.kde_night_light, night_light_matrix);
     if(night_light && !self->night_light_message_shown) {
         self->night_light_message_shown = true;
         fprintf(stderr, "gsr info: gsr_capture_kms_update_hdr_color_transforms: night light is active, removing the night light tint from the capture\n");

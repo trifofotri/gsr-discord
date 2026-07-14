@@ -3,12 +3,14 @@
 
 #include "capture.h"
 #include "../cursor.h"
+#include "../kde_night_light.h"
 #include "../../kms/kms_shared.h"
 
 typedef struct {
     gsr_egl *egl;
     gsr_cursor *x11_cursor;
     gsr_kms_response *kms_response;
+    gsr_kde_night_light *kde_night_light; /* optional */
     const char *display_to_capture; /* A copy is made of this */
     bool hdr;
     bool record_cursor;
