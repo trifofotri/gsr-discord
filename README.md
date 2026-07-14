@@ -78,7 +78,7 @@ When building GPU Screen Recorder with portal support (`-Dportal=true` meson opt
 ## Runtime dependencies
 * libglvnd (which provides libgl, libglx and libegl) is needed. Your system needs to support at least OpenGL ES 3.0 (released in 2012)
 * vulkan-icd-loader (which provides the runtime vulkan library. This is only needed if vulkan video encoding option is used)
-* libturbojpeg (aka libjpeg-turbo) is needed when capturing camera with mjpeg pixel format option
+* libturbojpeg (aka libjpeg-turbo) is needed when capturing camera with mjpeg pixel format option, or for faster jpeg screenshots
 
 There are also additional dependencies needed at runtime depending on your GPU vendor:
 

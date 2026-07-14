@@ -9,6 +9,60 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <assert.h>
+#include <dlfcn.h>
+
+#define TJPF_RGBA 7
+#define TJSAMP_420 2
+
+typedef void* tjhandle;
+typedef tjhandle (*FUNC_tjInitCompress)(void);
+typedef int (*FUNC_tjCompress2)(tjhandle handle, const unsigned char *srcBuf,
+                                int width, int pitch, int height, int pixelFormat,
+                                unsigned char **jpegBuf, unsigned long *jpegSize,
+                                int jpegSubsamp, int jpegQual, int flags);
+typedef int (*FUNC_tjDestroy)(tjhandle handle);
+typedef void (*FUNC_tjFree)(unsigned char *buffer);
+
+static bool write_buffer_to_file(const char *filepath, const unsigned char *data, unsigned long size) {
+    FILE *file = fopen(filepath, "wb");
+    if(!file)
+        return false;
+
+    const bool success = fwrite(data, size, 1, file) == 1;
+    fclose(file);
+    return success;
+}
+
+static bool write_jpeg_with_libturbojpeg(const char *filepath, int width, int height, const void *data, int quality) {
+    void *libturbojpeg_lib = dlopen("libturbojpeg.so.0", RTLD_LAZY);
+    if(!libturbojpeg_lib)
+        return false;
+
+    bool success = false;
+    const FUNC_tjInitCompress tjInitCompress_func = (FUNC_tjInitCompress)dlsym(libturbojpeg_lib, "tjInitCompress");
+    const FUNC_tjCompress2 tjCompress2_func = (FUNC_tjCompress2)dlsym(libturbojpeg_lib, "tjCompress2");
+    const FUNC_tjDestroy tjDestroy_func = (FUNC_tjDestroy)dlsym(libturbojpeg_lib, "tjDestroy");
+    const FUNC_tjFree tjFree_func = (FUNC_tjFree)dlsym(libturbojpeg_lib, "tjFree");
+    if(!tjInitCompress_func || !tjCompress2_func || !tjDestroy_func || !tjFree_func) {
+        dlclose(libturbojpeg_lib);
+        return false;
+    }
+
+    tjhandle compressor = tjInitCompress_func();
+    if(compressor) {
+        unsigned char *jpeg_data = NULL;
+        unsigned long jpeg_size = 0;
+        if(tjCompress2_func(compressor, data, width, width * 4, height, TJPF_RGBA, &jpeg_data, &jpeg_size, TJSAMP_420, quality, 0) == 0)
+            success = write_buffer_to_file(filepath, jpeg_data, jpeg_size);
+
+        if(jpeg_data)
+            tjFree_func(jpeg_data);
+        tjDestroy_func(compressor);
+    }
+
+    dlclose(libturbojpeg_lib);
+    return success;
+}
 
 /* TODO: Support hdr/10-bit */
 bool gsr_image_writer_init_opengl(gsr_image_writer *self, gsr_egl *egl, int width, int height) {
@@ -40,7 +94,9 @@ static bool gsr_image_writer_write_memory_to_file(gsr_image_writer *self, const 
     bool success = false;
     switch(image_format) {
         case GSR_IMAGE_FORMAT_JPEG:
-            success = stbi_write_jpg(filepath, self->width, self->height, 4, data, quality);
+            success = write_jpeg_with_libturbojpeg(filepath, self->width, self->height, data, quality);
+            if(!success)
+                success = stbi_write_jpg(filepath, self->width, self->height, 4, data, quality);
             break;
         case GSR_IMAGE_FORMAT_PNG:
             success = stbi_write_png(filepath, self->width, self->height, 4, data, 0);
