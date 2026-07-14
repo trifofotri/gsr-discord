@@ -425,3 +425,7 @@ Region capture works incorrectly on gnome with hidpi, especially with 150% scali
 
 -s works incorrectly with multiple capture sources, for example "screen|screen;x=3840" -s 3840x2160.
     To fix this the capture methods need to store the original size of the capture source first, then loop through all capture sources and rescale them. Do the rescaling outside the capture methods code?
+
+Take color pipeline into consideration in kms hdr capture. Right now kde only uses that on intel.
+
+Maybe use 3D LUT for hdr tonemapping instead of per fragment math.
