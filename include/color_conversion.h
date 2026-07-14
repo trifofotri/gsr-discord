@@ -6,7 +6,7 @@
 #include "vec2.h"
 #include <stdbool.h>
 
-#define GSR_COLOR_CONVERSION_MAX_GRAPHICS_SHADERS 12
+#define GSR_COLOR_CONVERSION_MAX_GRAPHICS_SHADERS 18
 #define GSR_COLOR_CONVERSION_MAX_FRAMEBUFFERS 2
 
 typedef enum {
@@ -37,6 +37,10 @@ typedef enum {
 typedef struct {
     int rotation_matrix;
     int offset;
+    int hdr_source_max_pq;
+    int hdr_sdr_white_pq;
+    int hdr_sdr_white_scale;
+    int gamma_lut_enabled;
 } gsr_color_graphics_uniforms;
 
 typedef struct {
@@ -64,6 +68,13 @@ typedef struct {
     unsigned int vertex_buffer_object_id;
 
     bool schedule_clear;
+    float hdr_source_max_pq;
+    float hdr_sdr_white_pq;
+    float hdr_sdr_white_scale;
+    unsigned int gamma_lut_texture_id;
+    bool gamma_lut_apply;
+    bool hdr_shaders_loaded;
+    bool hdr_shaders_load_failed;
 } gsr_color_conversion;
 
 int gsr_color_conversion_init(gsr_color_conversion *self, const gsr_color_conversion_params *params);
@@ -71,6 +82,9 @@ void gsr_color_conversion_deinit(gsr_color_conversion *self);
 
 void gsr_color_conversion_draw(gsr_color_conversion *self, unsigned int texture_id, vec2i destination_pos, vec2i destination_size, vec2i source_pos, vec2i source_size, vec2i texture_size, gsr_rotation rotation, gsr_flip flip, gsr_source_color source_color, bool external_texture);
 void gsr_color_conversion_clear(gsr_color_conversion *self);
+void gsr_color_conversion_set_hdr_to_sdr_tone_mapping(gsr_color_conversion *self, bool enable, float hdr_peak_luminance, float sdr_white_luminance);
+void gsr_color_conversion_set_gamma_lut(gsr_color_conversion *self, const float *rgb_values, int num_entries);
+void gsr_color_conversion_enable_gamma_lut(gsr_color_conversion *self, bool enable);
 void gsr_color_conversion_read_destination_texture(gsr_color_conversion *self, int destination_texture_index, int x, int y, int width, int height, unsigned int color_format, unsigned int data_format, void *pixels);
 
 gsr_rotation gsr_monitor_rotation_to_rotation(gsr_monitor_rotation monitor_rotation);

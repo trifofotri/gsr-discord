@@ -26,6 +26,12 @@ typedef enum {
     GSR_MONITOR_ROT_270,
 } gsr_monitor_rotation;
 
+typedef struct {
+    bool hdr_enabled;
+    float sdr_white_luminance; /* cd/m² (nits) */
+    float max_peak_luminance;  /* cd/m² (nits) */
+} gsr_monitor_hdr_info;
+
 typedef enum {
     GSR_CONNECTION_X11,
     GSR_CONNECTION_WAYLAND,

@@ -28,3 +28,9 @@ void* gsr_window_get_window(gsr_window *self) {
 void gsr_window_for_each_active_monitor_output_cached(const gsr_window *self, active_monitor_callback callback, void *userdata) {
     self->for_each_active_monitor_output_cached(self, callback, userdata);
 }
+
+bool gsr_window_get_monitor_hdr_info(const gsr_window *self, const char *monitor_name, gsr_monitor_hdr_info *hdr_info) {
+    if(self->get_monitor_hdr_info)
+        return self->get_monitor_hdr_info(self, monitor_name, hdr_info);
+    return false;
+}

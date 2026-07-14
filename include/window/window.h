@@ -21,6 +21,7 @@ struct gsr_window {
     void* (*get_display)(gsr_window *self);
     void* (*get_window)(gsr_window *self);
     void (*for_each_active_monitor_output_cached)(const gsr_window *self, active_monitor_callback callback, void *userdata);
+    bool (*get_monitor_hdr_info)(const gsr_window *self, const char *monitor_name, gsr_monitor_hdr_info *hdr_info); /* can be NULL */
     void *priv;
 };
 
@@ -33,5 +34,6 @@ gsr_display_server gsr_window_get_display_server(const gsr_window *self);
 void* gsr_window_get_display(gsr_window *self);
 void* gsr_window_get_window(gsr_window *self);
 void gsr_window_for_each_active_monitor_output_cached(const gsr_window *self, active_monitor_callback callback, void *userdata);
+bool gsr_window_get_monitor_hdr_info(const gsr_window *self, const char *monitor_name, gsr_monitor_hdr_info *hdr_info);
 
 #endif /* GSR_WINDOW_H */

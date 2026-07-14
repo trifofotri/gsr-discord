@@ -236,15 +236,10 @@ Alternatively you can record with h264 codec (-k h264, which is also the default
 This can happen if your video player is missing the H264/HEVC video codecs. Either install the codecs or use mpv.
 ## I get stutter in the video
 Try recording to an SSD and make sure it's not using NTFS file system. Also try recording with "content" framerate mode (`-fm content`).
-## The colors look washed out when recording a monitor with HDR enabled
-You have to either record in hdr mode (-k `hevc_hdr` or -k `av1_hdr` option) to record a HDR video or record with desktop portal option (`-w portal`) to turn the HDR recording into SDR.
-## GPU Screen Recorder records night light when recording in HDR mode
+## GPU Screen Recorder records night light
 You can record with desktop portal option (`-w portal`) instead which ignores night light, if you are ok with recording without HDR.
 ## Kdenlive says that the video is not usable for editing because it has variable frame rate
 To fix this you can either just press cancel, which will allow you to continue or record the video in .mkv format or constant frame rate (-fm cfr). I recommend recording the video in .mkv format and variable frame rate (-fm vfr).
-## Colors look incorrect when recording HDR (with hevc_hdr/av1_hdr) or using an ICC profile
-KDE Plasma version 6.2 broke HDR and ICC profiles for screen recorders. This was changed in KDE plasma version 6.3 and recording HDR works now, as long as you set HDR brightness to 100% (which means setting "Maximum SDR Brightness" in KDE plasma display settings to 203) and set color accuracy to "Prefer color accuracy". If you want to convert HDR to SDR then record with desktop portal option (`-w portal`) instead.
-I don't know how well recording HDR works in wayland compositors other than KDE plasma.
 ## GPU Screen Recorder starts lagging after 30-40 minutes when launching GPU Screen Recorder from steam command launcher
 This is a [steam issue](https://github.com/ValveSoftware/steam-for-linux/issues/11446). Prepend the gpu-screen-recorder command with `LD_PREFIX=""`, for example `LD_PREFIX="" gpu-screen-recorder -w screen -o video.mp4`.
 ## How do I apply audio effects, such as noise suppression?

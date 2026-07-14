@@ -11,6 +11,7 @@
 #include <fcntl.h>
 
 #include <xf86drm.h>
+#include <xf86drmMode.h>
 #include <drm_fourcc.h>
 
 #include <libavutil/mastering_display_metadata.h>
@@ -19,6 +20,7 @@
 
 #define HDMI_STATIC_METADATA_TYPE1 0
 #define HDMI_EOTF_SMPTE_ST2084 2
+#define HDR_PEAK_LUMINANCE_FALLBACK 1000.0f
 
 #define MAX_CONNECTOR_IDS 32
 
@@ -46,6 +48,13 @@ typedef struct {
 
     struct hdr_output_metadata hdr_metadata;
     bool hdr_metadata_set;
+    bool tone_mapping_message_shown;
+
+    int drm_card_fd;
+    uint32_t gamma_lut_connector_id;
+    uint32_t gamma_lut_crtc_id;
+    uint32_t gamma_lut_property_id;
+    uint64_t gamma_lut_blob_id;
 
     bool is_x11;
 
@@ -78,6 +87,11 @@ static void gsr_capture_kms_stop(gsr_capture_kms *self) {
     if(self->cursor_texture_id) {
         self->params.egl->glDeleteTextures(1, &self->cursor_texture_id);
         self->cursor_texture_id = 0;
+    }
+
+    if(self->drm_card_fd > 0) {
+        close(self->drm_card_fd);
+        self->drm_card_fd = -1;
     }
 
     // if(self->drm_fd > 0) {
@@ -151,6 +165,7 @@ static int gsr_capture_kms_start(gsr_capture *cap, gsr_capture_metadata *capture
     gsr_capture_kms *self = cap->priv;
 
     gsr_capture_kms_create_input_texture_ids(self);
+    self->drm_card_fd = open(self->params.egl->card_path, O_RDONLY);
 
     gsr_monitor monitor;
     self->monitor_id.num_connector_ids = 0;
@@ -258,6 +273,155 @@ static bool hdr_metadata_is_supported_format(const struct hdr_output_metadata *h
     return hdr_metadata->metadata_type == HDMI_STATIC_METADATA_TYPE1 &&
         hdr_metadata->hdmi_metadata_type1.metadata_type == HDMI_STATIC_METADATA_TYPE1 &&
         hdr_metadata->hdmi_metadata_type1.eotf == HDMI_EOTF_SMPTE_ST2084;
+}
+
+static float hdr_metadata_get_max_luminance(const struct hdr_output_metadata *hdr_metadata) {
+    float max_luminance = hdr_metadata->hdmi_metadata_type1.max_cll;
+    if(max_luminance <= 0.0f)
+        max_luminance = hdr_metadata->hdmi_metadata_type1.max_display_mastering_luminance;
+    return max_luminance;
+}
+
+static bool drm_plane_is_hdr(const gsr_kms_response_item *drm_fd) {
+    return drm_fd->has_hdr_metadata && hdr_metadata_is_supported_format(&drm_fd->hdr_metadata);
+}
+
+static void gsr_capture_kms_resolve_gamma_lut_property(gsr_capture_kms *self, uint32_t connector_id) {
+    self->gamma_lut_connector_id = connector_id;
+    self->gamma_lut_crtc_id = 0;
+    self->gamma_lut_property_id = 0;
+
+    drmModeConnector *connector = drmModeGetConnectorCurrent(self->drm_card_fd, connector_id);
+    if(!connector)
+        return;
+
+    if(connector->encoder_id) {
+        drmModeEncoder *encoder = drmModeGetEncoder(self->drm_card_fd, connector->encoder_id);
+        if(encoder) {
+            self->gamma_lut_crtc_id = encoder->crtc_id;
+            drmModeFreeEncoder(encoder);
+        }
+    }
+    drmModeFreeConnector(connector);
+
+    if(self->gamma_lut_crtc_id == 0)
+        return;
+
+    drmModeObjectProperties *properties = drmModeObjectGetProperties(self->drm_card_fd, self->gamma_lut_crtc_id, DRM_MODE_OBJECT_CRTC);
+    if(!properties)
+        return;
+
+    for(uint32_t i = 0; i < properties->count_props; ++i) {
+        drmModePropertyRes *property = drmModeGetProperty(self->drm_card_fd, properties->props[i]);
+        if(!property)
+            continue;
+
+        if(strcmp(property->name, "GAMMA_LUT") == 0)
+            self->gamma_lut_property_id = property->prop_id;
+
+        drmModeFreeProperty(property);
+        if(self->gamma_lut_property_id)
+            break;
+    }
+    drmModeFreeObjectProperties(properties);
+}
+
+static uint64_t gsr_capture_kms_get_gamma_lut_blob_id(gsr_capture_kms *self) {
+    if(self->gamma_lut_crtc_id == 0 || self->gamma_lut_property_id == 0)
+        return 0;
+
+    uint64_t blob_id = 0;
+    drmModeObjectProperties *properties = drmModeObjectGetProperties(self->drm_card_fd, self->gamma_lut_crtc_id, DRM_MODE_OBJECT_CRTC);
+    if(!properties)
+        return 0;
+
+    for(uint32_t i = 0; i < properties->count_props; ++i) {
+        if(properties->props[i] == self->gamma_lut_property_id) {
+            blob_id = properties->prop_values[i];
+            break;
+        }
+    }
+    drmModeFreeObjectProperties(properties);
+    return blob_id;
+}
+
+static void gsr_capture_kms_update_gamma_lut(gsr_capture_kms *self, gsr_color_conversion *color_conversion) {
+    if(self->drm_card_fd <= 0)
+        return;
+
+    if(self->drm_fd->connector_id != self->gamma_lut_connector_id)
+        gsr_capture_kms_resolve_gamma_lut_property(self, self->drm_fd->connector_id);
+
+    const uint64_t blob_id = gsr_capture_kms_get_gamma_lut_blob_id(self);
+    if(blob_id == self->gamma_lut_blob_id)
+        return;
+
+    self->gamma_lut_blob_id = blob_id;
+    if(blob_id == 0) {
+        gsr_color_conversion_set_gamma_lut(color_conversion, NULL, 0);
+        return;
+    }
+
+    drmModePropertyBlobRes *blob = drmModeGetPropertyBlob(self->drm_card_fd, blob_id);
+    if(!blob) {
+        self->gamma_lut_blob_id = 0;
+        gsr_color_conversion_set_gamma_lut(color_conversion, NULL, 0);
+        return;
+    }
+
+    const int num_entries = blob->length / sizeof(struct drm_color_lut);
+    const struct drm_color_lut *lut = blob->data;
+    float *rgb_values = malloc(num_entries * 3 * sizeof(float));
+    if(rgb_values && num_entries > 0) {
+        for(int i = 0; i < num_entries; ++i) {
+            rgb_values[i*3 + 0] = (float)lut[i].red / 65535.0f;
+            rgb_values[i*3 + 1] = (float)lut[i].green / 65535.0f;
+            rgb_values[i*3 + 2] = (float)lut[i].blue / 65535.0f;
+        }
+        gsr_color_conversion_set_gamma_lut(color_conversion, rgb_values, num_entries);
+    } else {
+        self->gamma_lut_blob_id = 0;
+        gsr_color_conversion_set_gamma_lut(color_conversion, NULL, 0);
+    }
+
+    free(rgb_values);
+    drmModeFreePropertyBlob(blob);
+}
+
+static void gsr_capture_kms_update_hdr_to_sdr_tone_mapping(gsr_capture_kms *self, gsr_color_conversion *color_conversion, const gsr_kms_response_item *drm_fd) {
+    const bool plane_is_hdr = drm_plane_is_hdr(drm_fd);
+    gsr_color_conversion_enable_gamma_lut(color_conversion, plane_is_hdr && self->gamma_lut_blob_id != 0);
+
+    const bool tone_map_hdr_to_sdr = !self->params.hdr && plane_is_hdr;
+    if(!tone_map_hdr_to_sdr) {
+        gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, false, 0.0f, 0.0f);
+        return;
+    }
+
+    float sdr_white_luminance = 0.0f;
+    float hdr_peak_luminance = hdr_metadata_get_max_luminance(&drm_fd->hdr_metadata);
+
+    gsr_monitor_hdr_info monitor_hdr_info;
+    if(gsr_window_get_monitor_hdr_info(self->params.egl->window, self->params.display_to_capture, &monitor_hdr_info)) {
+        if(monitor_hdr_info.sdr_white_luminance > 0.0f)
+            sdr_white_luminance = monitor_hdr_info.sdr_white_luminance;
+        if(monitor_hdr_info.max_peak_luminance > 0.0f)
+            hdr_peak_luminance = monitor_hdr_info.max_peak_luminance;
+    }
+
+    if(hdr_peak_luminance <= 0.0f)
+        hdr_peak_luminance = HDR_PEAK_LUMINANCE_FALLBACK;
+
+    if(sdr_white_luminance > hdr_peak_luminance)
+        sdr_white_luminance = hdr_peak_luminance;
+
+    gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, true, hdr_peak_luminance, sdr_white_luminance);
+
+    if(!self->tone_mapping_message_shown) {
+        self->tone_mapping_message_shown = true;
+        fprintf(stderr, "gsr info: gsr_capture_kms_update_hdr_to_sdr_tone_mapping: the monitor is in hdr mode, tone mapping the hdr content to sdr (sdr white luminance: %d nits, hdr peak luminance: %d nits). Record with -k hevc_hdr or -k av1_hdr video codec option to record hdr instead\n",
+            (int)(sdr_white_luminance <= 0.0f ? 203.0f : sdr_white_luminance), (int)hdr_peak_luminance);
+    }
 }
 
 // TODO: Check if this hdr data can be changed after the call to av_packet_side_data_add
@@ -467,6 +631,8 @@ static void render_drm_cursor(gsr_capture_kms *self, gsr_color_conversion *color
     if(cursor_image)
         self->params.egl->eglDestroyImage(self->params.egl->egl_display, cursor_image);
 
+    gsr_capture_kms_update_hdr_to_sdr_tone_mapping(self, color_conversion, cursor_drm_fd);
+
     self->params.egl->glEnable(GL_SCISSOR_TEST);
     self->params.egl->glScissor(target_pos.x, target_pos.y, output_size.x, output_size.y);
 
@@ -521,6 +687,8 @@ static void gsr_capture_kms_update_connector_ids(gsr_capture_kms *self) {
     if(self->is_x11)
         return;
 
+    self->gamma_lut_connector_id = 0;
+
     self->monitor_id.num_connector_ids = 0;
     const gsr_connection_type connection_type = self->is_x11 ? GSR_CONNECTION_X11 : GSR_CONNECTION_DRM;
     // MonitorCallbackUserdata monitor_callback_userdata = {
@@ -571,6 +739,9 @@ static void gsr_capture_kms_pre_capture(gsr_capture *cap, gsr_capture_metadata *
     if(!self->drm_fd)
         return;
 
+    if(drm_plane_is_hdr(self->drm_fd))
+        gsr_capture_kms_update_gamma_lut(self, color_conversion);
+
     if(self->drm_fd->has_hdr_metadata && self->params.hdr && hdr_metadata_is_supported_format(&self->drm_fd->hdr_metadata))
         gsr_kms_set_hdr_metadata(self, self->drm_fd);
 
@@ -599,6 +770,8 @@ static void render_monitor_plane(gsr_capture_kms *self, gsr_color_conversion *co
         gsr_capture_kms_bind_image_to_input_texture_with_fallback(self, image);
         self->params.egl->eglDestroyImage(self->params.egl->egl_display, image);
     }
+
+    gsr_capture_kms_update_hdr_to_sdr_tone_mapping(self, color_conversion, self->drm_fd);
 
     gsr_color_conversion_draw(color_conversion, self->external_texture_fallback ? self->external_input_texture_id : self->input_texture_id,
         self->target_pos, self->output_size,
@@ -657,6 +830,8 @@ static void render_drm_plane(gsr_capture_kms *self, gsr_color_conversion *color_
 
     gsr_capture_kms_bind_image_to_input_texture_with_fallback(self, image);
     self->params.egl->eglDestroyImage(self->params.egl->egl_display, image);
+
+    gsr_capture_kms_update_hdr_to_sdr_tone_mapping(self, color_conversion, plane_drm_fd);
 
     self->params.egl->glEnable(GL_SCISSOR_TEST);
     self->params.egl->glScissor(target_pos.x, target_pos.y, output_size.x, output_size.y);
@@ -724,6 +899,9 @@ static int gsr_capture_kms_capture(gsr_capture *cap, gsr_capture_metadata *captu
             render_drm_cursor(self, color_conversion, capture_metadata, cursor_drm_fd, self->target_pos, self->output_size, framebuffer_size);
         }
     }
+
+    gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, false, 0.0f, 0.0f);
+    gsr_color_conversion_enable_gamma_lut(color_conversion, false);
 
     //self->params.egl->glFlush();
     //self->params.egl->glFinish();

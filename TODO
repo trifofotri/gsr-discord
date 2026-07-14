@@ -64,8 +64,6 @@ Drop frames if live streaming cant keep up with target fps, or dynamically chang
 
 Instead of sending a big list of drm data back to kms client, send the monitor we want to record to kms server and the server should respond with only the matching monitor, and cursor.
 
-Tonemap hdr to sdr when hdr is enabled and when hevc_hdr/av1_hdr is not used.
-
 Rotate cursor texture properly (around top left origin).
 
 Modify ffmpeg to accept opengl texture for nvenc encoding. Removes extra buffers and copies.
