@@ -10,6 +10,12 @@
 #define GSR_COLOR_CONVERSION_MAX_FRAMEBUFFERS 2
 
 typedef enum {
+    GSR_COLOR_MATRIX_TRANSFER_PQ           = 1,
+    GSR_COLOR_MATRIX_TRANSFER_GAMMA22      = 2,
+    GSR_COLOR_MATRIX_TRANSFER_GAMMA22_TO_PQ = 3
+} gsr_color_matrix_transfer;
+
+typedef enum {
     GSR_SOURCE_COLOR_RGB,
     GSR_SOURCE_COLOR_BGR,
     GSR_SOURCE_COLOR_YUYV
@@ -90,8 +96,8 @@ void gsr_color_conversion_set_hdr_to_sdr_tone_mapping(gsr_color_conversion *self
 void gsr_color_conversion_set_gamma_lut(gsr_color_conversion *self, const float *rgb_values, int num_entries);
 void gsr_color_conversion_enable_gamma_lut(gsr_color_conversion *self, bool enable);
 /* |linear_rgb_matrix| is a row major 3x3 matrix that is applied to linear rgb values in the draw functions, for RGB/BGR sources. NULL to disable.
-   |pq_color_transfer| chooses the transfer characteristics used to decode/encode the source image around the matrix multiply (pq or gamma 2.2) */
-void gsr_color_conversion_set_color_matrix(gsr_color_conversion *self, const float *linear_rgb_matrix, bool pq_color_transfer);
+   |transfer| chooses the transfer characteristics used to decode/encode the source image around the matrix multiply */
+void gsr_color_conversion_set_color_matrix(gsr_color_conversion *self, const float *linear_rgb_matrix, gsr_color_matrix_transfer transfer);
 void gsr_color_conversion_read_destination_texture(gsr_color_conversion *self, int destination_texture_index, int x, int y, int width, int height, unsigned int color_format, unsigned int data_format, void *pixels);
 
 gsr_rotation gsr_monitor_rotation_to_rotation(gsr_monitor_rotation monitor_rotation);

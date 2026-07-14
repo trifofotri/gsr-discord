@@ -451,6 +451,13 @@ static void gsr_capture_kms_update_hdr_color_transforms(gsr_capture_kms *self, g
         }
     }
 
+    const bool convert_sdr_to_hdr = self->params.hdr && !plane_is_hdr;
+    if(convert_sdr_to_hdr && !self->hdr_luminance_message_shown) {
+        self->hdr_luminance_message_shown = true;
+        fprintf(stderr, "gsr info: gsr_capture_kms_update_hdr_color_transforms: the monitor is in sdr mode, converting the captured sdr image to hdr (BT.709 to BT.2020 with sdr white at %d nits)\n",
+            (int)SDR_WHITE_LUMINANCE_REFERENCE);
+    }
+
     const bool tone_map_hdr_to_sdr = !self->params.hdr && plane_is_hdr;
     gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, tone_map_hdr_to_sdr, hdr_peak_luminance, sdr_white_luminance);
     if(tone_map_hdr_to_sdr && !self->tone_mapping_message_shown) {
@@ -459,7 +466,21 @@ static void gsr_capture_kms_update_hdr_color_transforms(gsr_capture_kms *self, g
             (int)sdr_white_luminance, (int)hdr_peak_luminance);
     }
 
-    if(night_light || luminance_scale != 1.0f) {
+    if(convert_sdr_to_hdr) {
+        /* ITU-R BT.2087 */
+        static const float BT709_TO_BT2020[9] = {
+            0.627404f, 0.329283f, 0.043313f,
+            0.069097f, 0.919540f, 0.011362f,
+            0.016391f, 0.088013f, 0.895595f
+        };
+        float color_matrix[9];
+        for(int i = 0; i < 9; ++i) {
+            color_matrix[i] = BT709_TO_BT2020[i] * (SDR_WHITE_LUMINANCE_REFERENCE / 10000.0f);
+            if(night_light)
+                color_matrix[i] *= night_light_matrix[(i % 3) * 4];
+        }
+        gsr_color_conversion_set_color_matrix(color_conversion, color_matrix, GSR_COLOR_MATRIX_TRANSFER_GAMMA22_TO_PQ);
+    } else if(night_light || luminance_scale != 1.0f) {
         float color_matrix[9] = {
             luminance_scale, 0.0f, 0.0f,
             0.0f, luminance_scale, 0.0f,
@@ -470,10 +491,32 @@ static void gsr_capture_kms_update_hdr_color_transforms(gsr_capture_kms *self, g
                 color_matrix[i] = night_light_matrix[i] * luminance_scale;
             }
         }
-        gsr_color_conversion_set_color_matrix(color_conversion, color_matrix, plane_is_hdr);
+        gsr_color_conversion_set_color_matrix(color_conversion, color_matrix, plane_is_hdr ? GSR_COLOR_MATRIX_TRANSFER_PQ : GSR_COLOR_MATRIX_TRANSFER_GAMMA22);
     } else {
-        gsr_color_conversion_set_color_matrix(color_conversion, NULL, false);
+        gsr_color_conversion_set_color_matrix(color_conversion, NULL, GSR_COLOR_MATRIX_TRANSFER_PQ);
     }
+}
+
+static void gsr_kms_set_sdr_in_hdr_metadata(gsr_capture_kms *self) {
+    if(self->hdr_metadata_set)
+        return;
+
+    self->hdr_metadata_set = true;
+    memset(&self->hdr_metadata, 0, sizeof(self->hdr_metadata));
+    self->hdr_metadata.metadata_type = HDMI_STATIC_METADATA_TYPE1;
+    self->hdr_metadata.hdmi_metadata_type1.metadata_type = HDMI_STATIC_METADATA_TYPE1;
+    self->hdr_metadata.hdmi_metadata_type1.eotf = HDMI_EOTF_SMPTE_ST2084;
+    self->hdr_metadata.hdmi_metadata_type1.display_primaries[0].x = 0.64 * 50000;
+    self->hdr_metadata.hdmi_metadata_type1.display_primaries[0].y = 0.33 * 50000;
+    self->hdr_metadata.hdmi_metadata_type1.display_primaries[1].x = 0.30 * 50000;
+    self->hdr_metadata.hdmi_metadata_type1.display_primaries[1].y = 0.60 * 50000;
+    self->hdr_metadata.hdmi_metadata_type1.display_primaries[2].x = 0.15 * 50000;
+    self->hdr_metadata.hdmi_metadata_type1.display_primaries[2].y = 0.06 * 50000;
+    self->hdr_metadata.hdmi_metadata_type1.white_point.x = 0.3127 * 50000;
+    self->hdr_metadata.hdmi_metadata_type1.white_point.y = 0.3290 * 50000;
+    self->hdr_metadata.hdmi_metadata_type1.max_display_mastering_luminance = SDR_WHITE_LUMINANCE_REFERENCE;
+    self->hdr_metadata.hdmi_metadata_type1.max_cll = SDR_WHITE_LUMINANCE_REFERENCE;
+    self->hdr_video_max_luminance = SDR_WHITE_LUMINANCE_REFERENCE;
 }
 
 // TODO: Check if this hdr data can be changed after the call to av_packet_side_data_add
@@ -799,8 +842,12 @@ static void gsr_capture_kms_pre_capture(gsr_capture *cap, gsr_capture_metadata *
     if(drm_plane_is_hdr(self->drm_fd))
         gsr_capture_kms_update_gamma_lut(self, color_conversion);
 
-    if(self->drm_fd->has_hdr_metadata && self->params.hdr && hdr_metadata_is_supported_format(&self->drm_fd->hdr_metadata))
-        gsr_kms_set_hdr_metadata(self, self->drm_fd);
+    if(self->params.hdr) {
+        if(drm_plane_is_hdr(self->drm_fd))
+            gsr_kms_set_hdr_metadata(self, self->drm_fd);
+        else
+            gsr_kms_set_sdr_in_hdr_metadata(self);
+    }
 
     const gsr_monitor_rotation plane_rotation = kms_rotation_to_gsr_monitor_rotation(self->drm_fd->rotation);
     self->final_monitor_rotation = self->capture_is_combined_plane ? GSR_MONITOR_ROT_0 : sub_rotations(self->display_server_monitor_rotation, plane_rotation);
@@ -959,7 +1006,7 @@ static int gsr_capture_kms_capture(gsr_capture *cap, gsr_capture_metadata *captu
 
     gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, false, 0.0f, 0.0f);
     gsr_color_conversion_enable_gamma_lut(color_conversion, false);
-    gsr_color_conversion_set_color_matrix(color_conversion, NULL, false);
+    gsr_color_conversion_set_color_matrix(color_conversion, NULL, GSR_COLOR_MATRIX_TRANSFER_PQ);
 
     //self->params.egl->glFlush();
     //self->params.egl->glFinish();

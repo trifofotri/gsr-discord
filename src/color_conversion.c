@@ -108,14 +108,17 @@
 #define COLOR_MATRIX_GLSL \
     "uniform int color_matrix_transfer;                                                               \n" \
     "uniform mat3 color_matrix;                                                                \n" \
-    "vec3 apply_color_matrix(vec3 color) {                                                           \n" \
-    "    if(color_matrix_transfer == 1) {                                                             \n" \
-    "        vec3 luminance = max(color_matrix * pq_to_luminance3(color), vec3(0.0));          \n" \
+    "vec3 apply_color_matrix(vec3 color) {                                                          \n" \
+    "    if(color_matrix_transfer == 1) {                                                            \n" \
+    "        vec3 luminance = max(color_matrix * pq_to_luminance3(color), vec3(0.0));                \n" \
     "        return luminance3_to_pq(luminance);                                                     \n" \
+    "    } else if(color_matrix_transfer == 2) {                                                     \n" \
+    "        vec3 linear_color = pow(max(color, vec3(0.0)), vec3(2.2));                              \n" \
+    "        linear_color = clamp(color_matrix * linear_color, vec3(0.0), vec3(1.0));                \n" \
+    "        return pow(linear_color, vec3(1.0/2.2));                                                \n" \
     "    } else {                                                                                    \n" \
     "        vec3 linear_color = pow(max(color, vec3(0.0)), vec3(2.2));                              \n" \
-    "        linear_color = clamp(color_matrix * linear_color, vec3(0.0), vec3(1.0));          \n" \
-    "        return pow(linear_color, vec3(1.0/2.2));                                                \n" \
+    "        return luminance3_to_pq(max(color_matrix * linear_color, vec3(0.0)));                   \n" \
     "    }                                                                                           \n" \
     "}                                                                                               \n"
 
@@ -1257,14 +1260,14 @@ void gsr_color_conversion_enable_gamma_lut(gsr_color_conversion *self, bool enab
     self->gamma_lut_apply = enable;
 }
 
-void gsr_color_conversion_set_color_matrix(gsr_color_conversion *self, const float *linear_rgb_matrix, bool pq_color_transfer) {
+void gsr_color_conversion_set_color_matrix(gsr_color_conversion *self, const float *linear_rgb_matrix, gsr_color_matrix_transfer transfer) {
     if(!linear_rgb_matrix) {
         self->color_matrix_transfer = 0;
         return;
     }
 
     memcpy(self->color_matrix, linear_rgb_matrix, sizeof(self->color_matrix));
-    self->color_matrix_transfer = pq_color_transfer ? 1 : 2;
+    self->color_matrix_transfer = transfer;
 }
 
 void gsr_color_conversion_read_destination_texture(gsr_color_conversion *self, int destination_texture_index, int x, int y, int width, int height, unsigned int color_format, unsigned int data_format, void *pixels) {
