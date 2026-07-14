@@ -41,6 +41,7 @@ src = [
     'src/damage.c',
     'src/image_writer.c',
     'src/args_parser.c',
+    'src/kde_night_light.c',
     'src/defs.c',
     'src/plugins.c',
     'src/wayland_host_bridge.c',
@@ -107,6 +108,7 @@ if uses_pipewire == true
         dependency('libspa-0.2'),
         dependency('dbus-1'),
     ]
+    add_project_arguments('-DGSR_DBUS', language : ['c', 'cpp'])
 endif
 
 add_project_arguments('-DGSR_VERSION="' + meson.project_version() + '"', language: ['c', 'cpp'])

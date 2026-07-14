@@ -311,6 +311,7 @@ struct gsr_egl {
     void (*glUniform1i)(int location, int v0);
     void (*glUniform2i)(int location, int v0, int v1);
     void (*glUniformMatrix2fv)(int location, int count, unsigned char transpose, const float *value);
+    void (*glUniformMatrix3fv)(int location, int count, unsigned char transpose, const float *value);
     void (*glDebugMessageCallback)(GLDEBUGPROC callback, const void *userParam);
     void (*glScissor)(int x, int y, int width, int height);
     void (*glCreateBuffers)(int n, unsigned int *buffers);

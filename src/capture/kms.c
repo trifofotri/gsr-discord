@@ -2,6 +2,7 @@
 #include "../../include/utils.h"
 #include "../../include/color_conversion.h"
 #include "../../include/cursor.h"
+#include "../../include/kde_night_light.h"
 #include "../../include/window/window.h"
 
 #include <stdlib.h>
@@ -56,6 +57,9 @@ typedef struct {
     uint32_t gamma_lut_property_id;
     uint64_t gamma_lut_blob_id;
 
+    gsr_kde_night_light *kde_night_light;
+    bool night_light_message_shown;
+
     bool is_x11;
 
     //int drm_fd;
@@ -92,6 +96,11 @@ static void gsr_capture_kms_stop(gsr_capture_kms *self) {
     if(self->drm_card_fd > 0) {
         close(self->drm_card_fd);
         self->drm_card_fd = -1;
+    }
+
+    if(self->kde_night_light) {
+        gsr_kde_night_light_destroy(self->kde_night_light);
+        self->kde_night_light = NULL;
     }
 
     // if(self->drm_fd > 0) {
@@ -172,6 +181,8 @@ static int gsr_capture_kms_start(gsr_capture *cap, gsr_capture_metadata *capture
 
     self->is_x11 = gsr_window_get_display_server(self->params.egl->window) == GSR_DISPLAY_SERVER_X11;
     const gsr_connection_type connection_type = self->is_x11 ? GSR_CONNECTION_X11 : GSR_CONNECTION_DRM;
+    if(!self->is_x11)
+        self->kde_night_light = gsr_kde_night_light_create();
 
     MonitorCallbackUserdata monitor_callback_userdata = {
         &self->monitor_id,
@@ -388,9 +399,25 @@ static void gsr_capture_kms_update_gamma_lut(gsr_capture_kms *self, gsr_color_co
     drmModeFreePropertyBlob(blob);
 }
 
+static void gsr_capture_kms_update_night_light(gsr_capture_kms *self, gsr_color_conversion *color_conversion, bool plane_is_hdr) {
+    float night_light_matrix[9];
+    if(!self->kde_night_light || !gsr_kde_night_light_get_inverse_matrix(self->kde_night_light, night_light_matrix)) {
+        gsr_color_conversion_set_night_light_matrix(color_conversion, NULL, false);
+        return;
+    }
+
+    gsr_color_conversion_set_night_light_matrix(color_conversion, night_light_matrix, plane_is_hdr);
+
+    if(!self->night_light_message_shown) {
+        self->night_light_message_shown = true;
+        fprintf(stderr, "gsr info: gsr_capture_kms_update_night_light: night light is active, removing the night light tint from the capture\n");
+    }
+}
+
 static void gsr_capture_kms_update_hdr_to_sdr_tone_mapping(gsr_capture_kms *self, gsr_color_conversion *color_conversion, const gsr_kms_response_item *drm_fd) {
     const bool plane_is_hdr = drm_plane_is_hdr(drm_fd);
     gsr_color_conversion_enable_gamma_lut(color_conversion, plane_is_hdr && self->gamma_lut_blob_id != 0);
+    gsr_capture_kms_update_night_light(self, color_conversion, plane_is_hdr);
 
     const bool tone_map_hdr_to_sdr = !self->params.hdr && plane_is_hdr;
     if(!tone_map_hdr_to_sdr) {
@@ -902,6 +929,7 @@ static int gsr_capture_kms_capture(gsr_capture *cap, gsr_capture_metadata *captu
 
     gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, false, 0.0f, 0.0f);
     gsr_color_conversion_enable_gamma_lut(color_conversion, false);
+    gsr_color_conversion_set_night_light_matrix(color_conversion, NULL, false);
 
     //self->params.egl->glFlush();
     //self->params.egl->glFinish();

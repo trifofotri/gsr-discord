@@ -237,7 +237,8 @@ This can happen if your video player is missing the H264/HEVC video codecs. Eith
 ## I get stutter in the video
 Try recording to an SSD and make sure it's not using NTFS file system. Also try recording with "content" framerate mode (`-fm content`).
 ## GPU Screen Recorder records night light
-You can record with desktop portal option (`-w portal`) instead which ignores night light, if you are ok with recording without HDR.
+On KDE Plasma the night light tint is automatically removed from the recording (both in SDR and HDR mode).
+On other compositors you can record with desktop portal option (`-w portal`) instead which ignores night light, if you are ok with recording without HDR.
 ## Kdenlive says that the video is not usable for editing because it has variable frame rate
 To fix this you can either just press cancel, which will allow you to continue or record the video in .mkv format or constant frame rate (-fm cfr). I recommend recording the video in .mkv format and variable frame rate (-fm vfr).
 ## GPU Screen Recorder starts lagging after 30-40 minutes when launching GPU Screen Recorder from steam command launcher

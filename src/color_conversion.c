@@ -92,6 +92,10 @@
     "    }                                                                                           \n" \
     "    return e1 * hdr_source_max_pq;                                                              \n" \
     "}                                                                                               \n" \
+    "vec3 luminance3_to_pq(vec3 luminance) {                                                         \n" \
+    "    vec3 l = pow(clamp(luminance, vec3(0.0), vec3(1.0)), vec3(PQ_M1));                          \n" \
+    "    return pow((PQ_C1 + PQ_C2*l) / (1.0 + PQ_C3*l), vec3(PQ_M2));                               \n" \
+    "}                                                                                               \n" \
     "vec3 tone_map_hdr_to_sdr(vec3 pq_rgb) {                                                         \n" \
     "    vec3 luminance = pq_to_luminance3(pq_rgb);                                                  \n" \
     "    float max_channel = max(luminance.r, max(luminance.g, luminance.b));                        \n" \
@@ -99,6 +103,20 @@
     "        luminance *= pq_to_luminance(bt2390_eetf(luminance_to_pq(max_channel))) / max_channel;  \n" \
     "    luminance = BT2020toBT709 * luminance;                                                      \n" \
     "    return pow(clamp(luminance * hdr_sdr_white_scale, 0.0, 1.0), vec3(1.0/2.2));                \n" \
+    "}                                                                                               \n"
+
+#define NIGHT_LIGHT_GLSL \
+    "uniform int night_light_transfer;                                                               \n" \
+    "uniform mat3 night_light_matrix;                                                                \n" \
+    "vec3 remove_night_light(vec3 color) {                                                           \n" \
+    "    if(night_light_transfer == 1) {                                                             \n" \
+    "        vec3 luminance = max(night_light_matrix * pq_to_luminance3(color), vec3(0.0));          \n" \
+    "        return luminance3_to_pq(luminance);                                                     \n" \
+    "    } else {                                                                                    \n" \
+    "        vec3 linear_color = pow(max(color, vec3(0.0)), vec3(2.2));                              \n" \
+    "        linear_color = clamp(night_light_matrix * linear_color, vec3(0.0), vec3(1.0));          \n" \
+    "        return pow(linear_color, vec3(1.0/2.2));                                                \n" \
+    "    }                                                                                           \n" \
     "}                                                                                               \n"
 
 #define GAMMA_LUT_GLSL \
@@ -119,6 +137,8 @@
 #define APPLY_HDR_TO_SDR_TONE_MAPPING \
     "  if(gamma_lut_enabled > 0.5)                                                   \n" \
     "    pixel.rgb = apply_gamma_lut(pixel.rgb);                                     \n" \
+    "  if(night_light_transfer != 0)                                                 \n" \
+    "    pixel.rgb = remove_night_light(pixel.rgb);                                  \n" \
     "  if(hdr_source_max_pq > 0.0)                                                   \n" \
     "    pixel.rgb = tone_map_hdr_to_sdr(pixel.rgb);                                 \n"
 
@@ -191,7 +211,7 @@ static int load_graphics_shader_y(gsr_shader *shader, gsr_egl *egl, gsr_color_gr
             "void main()                                                                     \n"
             "{                                                                               \n"
             "%s"
-            "}                                                                               \n", color_transform_matrix, hdr ? HDR_TO_SDR_TONE_MAPPING GAMMA_LUT_GLSL : "", main_code);
+            "}                                                                               \n", color_transform_matrix, hdr ? HDR_TO_SDR_TONE_MAPPING NIGHT_LIGHT_GLSL GAMMA_LUT_GLSL : "", main_code);
     } else {
         snprintf(fragment_shader, sizeof(fragment_shader),
             "#version 300 es                                                                 \n"
@@ -204,7 +224,7 @@ static int load_graphics_shader_y(gsr_shader *shader, gsr_egl *egl, gsr_color_gr
             "void main()                                                                     \n"
             "{                                                                               \n"
             "%s"
-            "}                                                                               \n", color_transform_matrix, hdr ? HDR_TO_SDR_TONE_MAPPING GAMMA_LUT_GLSL : "", main_code);
+            "}                                                                               \n", color_transform_matrix, hdr ? HDR_TO_SDR_TONE_MAPPING NIGHT_LIGHT_GLSL GAMMA_LUT_GLSL : "", main_code);
     }
 
     if(gsr_shader_init(shader, egl, vertex_shader, fragment_shader) != 0)
@@ -218,6 +238,8 @@ static int load_graphics_shader_y(gsr_shader *shader, gsr_egl *egl, gsr_color_gr
     uniforms->hdr_sdr_white_pq = egl->glGetUniformLocation(shader->program_id, "hdr_sdr_white_pq");
     uniforms->hdr_sdr_white_scale = egl->glGetUniformLocation(shader->program_id, "hdr_sdr_white_scale");
     uniforms->gamma_lut_enabled = egl->glGetUniformLocation(shader->program_id, "gamma_lut_enabled");
+    uniforms->night_light_transfer = egl->glGetUniformLocation(shader->program_id, "night_light_transfer");
+    uniforms->night_light_matrix = egl->glGetUniformLocation(shader->program_id, "night_light_matrix");
 
     egl->glUseProgram(shader->program_id);
     egl->glUniform1i(egl->glGetUniformLocation(shader->program_id, "gamma_lut"), 1);
@@ -265,7 +287,7 @@ static unsigned int load_graphics_shader_uv(gsr_shader *shader, gsr_egl *egl, gs
             "void main()                                                                           \n"
             "{                                                                                     \n"
             "%s"
-            "}                                                                                     \n", color_transform_matrix, hdr ? HDR_TO_SDR_TONE_MAPPING GAMMA_LUT_GLSL : "", main_code);
+            "}                                                                                     \n", color_transform_matrix, hdr ? HDR_TO_SDR_TONE_MAPPING NIGHT_LIGHT_GLSL GAMMA_LUT_GLSL : "", main_code);
     } else {
         snprintf(fragment_shader, sizeof(fragment_shader),
             "#version 300 es                                                                       \n"
@@ -278,7 +300,7 @@ static unsigned int load_graphics_shader_uv(gsr_shader *shader, gsr_egl *egl, gs
             "void main()                                                                           \n"
             "{                                                                                     \n"
             "%s"
-            "}                                                                                     \n", color_transform_matrix, hdr ? HDR_TO_SDR_TONE_MAPPING GAMMA_LUT_GLSL : "", main_code);
+            "}                                                                                     \n", color_transform_matrix, hdr ? HDR_TO_SDR_TONE_MAPPING NIGHT_LIGHT_GLSL GAMMA_LUT_GLSL : "", main_code);
     }
 
     if(gsr_shader_init(shader, egl, vertex_shader, fragment_shader) != 0)
@@ -292,6 +314,8 @@ static unsigned int load_graphics_shader_uv(gsr_shader *shader, gsr_egl *egl, gs
     uniforms->hdr_sdr_white_pq = egl->glGetUniformLocation(shader->program_id, "hdr_sdr_white_pq");
     uniforms->hdr_sdr_white_scale = egl->glGetUniformLocation(shader->program_id, "hdr_sdr_white_scale");
     uniforms->gamma_lut_enabled = egl->glGetUniformLocation(shader->program_id, "gamma_lut_enabled");
+    uniforms->night_light_transfer = egl->glGetUniformLocation(shader->program_id, "night_light_transfer");
+    uniforms->night_light_matrix = egl->glGetUniformLocation(shader->program_id, "night_light_matrix");
 
     egl->glUseProgram(shader->program_id);
     egl->glUniform1i(egl->glGetUniformLocation(shader->program_id, "gamma_lut"), 1);
@@ -335,7 +359,7 @@ static unsigned int load_graphics_shader_rgb(gsr_shader *shader, gsr_egl *egl, g
             "void main()                                                                           \n"
             "{                                                                                     \n"
             "%s"
-            "}                                                                                     \n", hdr ? HDR_TO_SDR_TONE_MAPPING GAMMA_LUT_GLSL : "", main_code);
+            "}                                                                                     \n", hdr ? HDR_TO_SDR_TONE_MAPPING NIGHT_LIGHT_GLSL GAMMA_LUT_GLSL : "", main_code);
     } else {
         snprintf(fragment_shader, sizeof(fragment_shader),
             "#version 300 es                                                                       \n"
@@ -347,7 +371,7 @@ static unsigned int load_graphics_shader_rgb(gsr_shader *shader, gsr_egl *egl, g
             "void main()                                                                           \n"
             "{                                                                                     \n"
             "%s"
-            "}                                                                                     \n", hdr ? HDR_TO_SDR_TONE_MAPPING GAMMA_LUT_GLSL : "", main_code);
+            "}                                                                                     \n", hdr ? HDR_TO_SDR_TONE_MAPPING NIGHT_LIGHT_GLSL GAMMA_LUT_GLSL : "", main_code);
     }
 
     if(gsr_shader_init(shader, egl, vertex_shader, fragment_shader) != 0)
@@ -361,6 +385,8 @@ static unsigned int load_graphics_shader_rgb(gsr_shader *shader, gsr_egl *egl, g
     uniforms->hdr_sdr_white_pq = egl->glGetUniformLocation(shader->program_id, "hdr_sdr_white_pq");
     uniforms->hdr_sdr_white_scale = egl->glGetUniformLocation(shader->program_id, "hdr_sdr_white_scale");
     uniforms->gamma_lut_enabled = egl->glGetUniformLocation(shader->program_id, "gamma_lut_enabled");
+    uniforms->night_light_transfer = egl->glGetUniformLocation(shader->program_id, "night_light_transfer");
+    uniforms->night_light_matrix = egl->glGetUniformLocation(shader->program_id, "night_light_matrix");
 
     egl->glUseProgram(shader->program_id);
     egl->glUniform1i(egl->glGetUniformLocation(shader->program_id, "gamma_lut"), 1);
@@ -632,7 +658,7 @@ static bool gsr_color_conversion_load_hdr_graphics_shaders(gsr_color_conversion 
 }
 
 static bool gsr_color_conversion_load_hdr_graphics_shaders_if_needed(gsr_color_conversion *self) {
-    const bool hdr_enabled = self->hdr_source_max_pq > 0.0f || (self->gamma_lut_apply && self->gamma_lut_texture_id != 0);
+    const bool hdr_enabled = self->hdr_source_max_pq > 0.0f || (self->gamma_lut_apply && self->gamma_lut_texture_id != 0) || self->night_light_transfer != 0;
     if(!hdr_enabled || self->hdr_shaders_load_failed)
         return false;
 
@@ -1004,6 +1030,8 @@ static void gsr_color_conversion_draw_graphics(gsr_color_conversion *self, unsig
                         self->params.egl->glUniform1f(self->graphics_uniforms[shader_index].hdr_sdr_white_pq, self->hdr_sdr_white_pq);
                         self->params.egl->glUniform1f(self->graphics_uniforms[shader_index].hdr_sdr_white_scale, self->hdr_sdr_white_scale);
                         self->params.egl->glUniform1f(self->graphics_uniforms[shader_index].gamma_lut_enabled, gamma_lut_enabled);
+                        self->params.egl->glUniform1i(self->graphics_uniforms[shader_index].night_light_transfer, self->night_light_transfer);
+                        self->params.egl->glUniformMatrix3fv(self->graphics_uniforms[shader_index].night_light_matrix, 1, GL_TRUE, self->night_light_matrix);
                     }
                     self->params.egl->glDrawArrays(GL_TRIANGLES, 0, 6);
 
@@ -1023,6 +1051,8 @@ static void gsr_color_conversion_draw_graphics(gsr_color_conversion *self, unsig
                             self->params.egl->glUniform1f(self->graphics_uniforms[shader_index].hdr_sdr_white_pq, self->hdr_sdr_white_pq);
                             self->params.egl->glUniform1f(self->graphics_uniforms[shader_index].hdr_sdr_white_scale, self->hdr_sdr_white_scale);
                             self->params.egl->glUniform1f(self->graphics_uniforms[shader_index].gamma_lut_enabled, gamma_lut_enabled);
+                            self->params.egl->glUniform1i(self->graphics_uniforms[shader_index].night_light_transfer, self->night_light_transfer);
+                            self->params.egl->glUniformMatrix3fv(self->graphics_uniforms[shader_index].night_light_matrix, 1, GL_TRUE, self->night_light_matrix);
                         }
                         self->params.egl->glDrawArrays(GL_TRIANGLES, 0, 6);
                     }
@@ -1045,6 +1075,8 @@ static void gsr_color_conversion_draw_graphics(gsr_color_conversion *self, unsig
                         self->params.egl->glUniform1f(self->graphics_uniforms[shader_index].hdr_sdr_white_pq, self->hdr_sdr_white_pq);
                         self->params.egl->glUniform1f(self->graphics_uniforms[shader_index].hdr_sdr_white_scale, self->hdr_sdr_white_scale);
                         self->params.egl->glUniform1f(self->graphics_uniforms[shader_index].gamma_lut_enabled, gamma_lut_enabled);
+                        self->params.egl->glUniform1i(self->graphics_uniforms[shader_index].night_light_transfer, self->night_light_transfer);
+                        self->params.egl->glUniformMatrix3fv(self->graphics_uniforms[shader_index].night_light_matrix, 1, GL_TRUE, self->night_light_matrix);
                     }
                     self->params.egl->glDrawArrays(GL_TRIANGLES, 0, 6);
                     break;
@@ -1223,6 +1255,16 @@ void gsr_color_conversion_set_gamma_lut(gsr_color_conversion *self, const float 
 
 void gsr_color_conversion_enable_gamma_lut(gsr_color_conversion *self, bool enable) {
     self->gamma_lut_apply = enable;
+}
+
+void gsr_color_conversion_set_night_light_matrix(gsr_color_conversion *self, const float *inverse_matrix, bool pq_color_transfer) {
+    if(!inverse_matrix) {
+        self->night_light_transfer = 0;
+        return;
+    }
+
+    memcpy(self->night_light_matrix, inverse_matrix, sizeof(self->night_light_matrix));
+    self->night_light_transfer = pq_color_transfer ? 1 : 2;
 }
 
 void gsr_color_conversion_read_destination_texture(gsr_color_conversion *self, int destination_texture_index, int x, int y, int width, int height, unsigned int color_format, unsigned int data_format, void *pixels) {

@@ -41,6 +41,8 @@ typedef struct {
     int hdr_sdr_white_pq;
     int hdr_sdr_white_scale;
     int gamma_lut_enabled;
+    int night_light_transfer;
+    int night_light_matrix;
 } gsr_color_graphics_uniforms;
 
 typedef struct {
@@ -73,6 +75,8 @@ typedef struct {
     float hdr_sdr_white_scale;
     unsigned int gamma_lut_texture_id;
     bool gamma_lut_apply;
+    int night_light_transfer;
+    float night_light_matrix[9];
     bool hdr_shaders_loaded;
     bool hdr_shaders_load_failed;
 } gsr_color_conversion;
@@ -85,6 +89,9 @@ void gsr_color_conversion_clear(gsr_color_conversion *self);
 void gsr_color_conversion_set_hdr_to_sdr_tone_mapping(gsr_color_conversion *self, bool enable, float hdr_peak_luminance, float sdr_white_luminance);
 void gsr_color_conversion_set_gamma_lut(gsr_color_conversion *self, const float *rgb_values, int num_entries);
 void gsr_color_conversion_enable_gamma_lut(gsr_color_conversion *self, bool enable);
+/* |inverse_matrix| is a row major 3x3 matrix that is applied to linear rgb values in the draw functions, for RGB/BGR sources. NULL to disable.
+   |pq_color_transfer| chooses the transfer characteristics used to decode/encode the source image around the matrix multiply (pq or gamma 2.2) */
+void gsr_color_conversion_set_night_light_matrix(gsr_color_conversion *self, const float *inverse_matrix, bool pq_color_transfer);
 void gsr_color_conversion_read_destination_texture(gsr_color_conversion *self, int destination_texture_index, int x, int y, int width, int height, unsigned int color_format, unsigned int data_format, void *pixels);
 
 gsr_rotation gsr_monitor_rotation_to_rotation(gsr_monitor_rotation monitor_rotation);
