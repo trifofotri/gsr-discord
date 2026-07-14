@@ -40,6 +40,9 @@ typedef struct {
     int32_t max_peak_brightness_override; /* cd/m² (nits), -1 if not set */
     uint32_t brightness;                  /* 0-10000 */
     uint32_t dimming;                     /* 0-10000 */
+    struct kde_output_device_mode_v2 **modes;
+    int num_modes;
+    int modes_capacity;
 } gsr_kde_output_device;
 
 struct gsr_window_wayland {
@@ -126,6 +129,14 @@ static void kde_output_device_free(gsr_kde_output_device *device) {
         free(device->name);
         device->name = NULL;
     }
+
+    for(int i = 0; i < device->num_modes; ++i) {
+        kde_output_device_mode_v2_destroy(device->modes[i]);
+    }
+    free(device->modes);
+    device->modes = NULL;
+    device->num_modes = 0;
+    device->modes_capacity = 0;
 }
 
 static void kde_output_device_handle_geometry(void *data, struct kde_output_device_v2 *device, int32_t x, int32_t y, int32_t physical_width, int32_t physical_height,
@@ -137,9 +148,23 @@ static void kde_output_device_handle_current_mode(void *data, struct kde_output_
     (void)data; (void)device; (void)mode;
 }
 
+/* The mode objects can't be destroyed here because later events reference them (current_mode).
+   They are destroyed when the output device is destroyed. */
 static void kde_output_device_handle_mode(void *data, struct kde_output_device_v2 *device, struct kde_output_device_mode_v2 *mode) {
-    (void)data; (void)device;
-    kde_output_device_mode_v2_destroy(mode);
+    (void)device;
+    gsr_kde_output_device *gsr_device = data;
+
+    if(gsr_device->num_modes == gsr_device->modes_capacity) {
+        const int new_capacity = gsr_device->modes_capacity == 0 ? 128 : gsr_device->modes_capacity * 2;
+        struct kde_output_device_mode_v2 **modes = realloc(gsr_device->modes, new_capacity * sizeof(struct kde_output_device_mode_v2*));
+        if(!modes)
+            return;
+        gsr_device->modes = modes;
+        gsr_device->modes_capacity = new_capacity;
+    }
+
+    gsr_device->modes[gsr_device->num_modes] = mode;
+    ++gsr_device->num_modes;
 }
 
 static void kde_output_device_handle_done(void *data, struct kde_output_device_v2 *device) {
@@ -294,6 +319,9 @@ static void gsr_window_wayland_add_kde_output_device(gsr_window_wayland *self, s
         .max_peak_brightness_override = -1,
         .brightness = KDE_BRIGHTNESS_MULTIPLIER_MAX,
         .dimming = KDE_BRIGHTNESS_MULTIPLIER_MAX,
+        .modes = NULL,
+        .num_modes = 0,
+        .modes_capacity = 0,
     };
     kde_output_device_v2_add_listener(device, &kde_output_device_listener, gsr_device);
 }

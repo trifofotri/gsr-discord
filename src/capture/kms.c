@@ -22,6 +22,7 @@
 #define HDMI_STATIC_METADATA_TYPE1 0
 #define HDMI_EOTF_SMPTE_ST2084 2
 #define HDR_PEAK_LUMINANCE_FALLBACK 1000.0f
+#define SDR_WHITE_LUMINANCE_REFERENCE 203.0f
 
 #define MAX_CONNECTOR_IDS 32
 
@@ -59,6 +60,8 @@ typedef struct {
 
     gsr_kde_night_light *kde_night_light;
     bool night_light_message_shown;
+    bool hdr_luminance_message_shown;
+    float hdr_video_max_luminance;
 
     bool is_x11;
 
@@ -399,55 +402,77 @@ static void gsr_capture_kms_update_gamma_lut(gsr_capture_kms *self, gsr_color_co
     drmModeFreePropertyBlob(blob);
 }
 
-static void gsr_capture_kms_update_night_light(gsr_capture_kms *self, gsr_color_conversion *color_conversion, bool plane_is_hdr) {
-    float night_light_matrix[9];
-    if(!self->kde_night_light || !gsr_kde_night_light_get_inverse_matrix(self->kde_night_light, night_light_matrix)) {
-        gsr_color_conversion_set_night_light_matrix(color_conversion, NULL, false);
-        return;
-    }
-
-    gsr_color_conversion_set_night_light_matrix(color_conversion, night_light_matrix, plane_is_hdr);
-
-    if(!self->night_light_message_shown) {
-        self->night_light_message_shown = true;
-        fprintf(stderr, "gsr info: gsr_capture_kms_update_night_light: night light is active, removing the night light tint from the capture\n");
-    }
-}
-
-static void gsr_capture_kms_update_hdr_to_sdr_tone_mapping(gsr_capture_kms *self, gsr_color_conversion *color_conversion, const gsr_kms_response_item *drm_fd) {
-    const bool plane_is_hdr = drm_plane_is_hdr(drm_fd);
-    gsr_color_conversion_enable_gamma_lut(color_conversion, plane_is_hdr && self->gamma_lut_blob_id != 0);
-    gsr_capture_kms_update_night_light(self, color_conversion, plane_is_hdr);
-
-    const bool tone_map_hdr_to_sdr = !self->params.hdr && plane_is_hdr;
-    if(!tone_map_hdr_to_sdr) {
-        gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, false, 0.0f, 0.0f);
-        return;
-    }
-
-    float sdr_white_luminance = 0.0f;
-    float hdr_peak_luminance = hdr_metadata_get_max_luminance(&drm_fd->hdr_metadata);
+static void gsr_capture_kms_get_monitor_luminances(gsr_capture_kms *self, const gsr_kms_response_item *drm_fd, float *sdr_white_luminance, float *hdr_peak_luminance) {
+    *sdr_white_luminance = 0.0f;
+    *hdr_peak_luminance = hdr_metadata_get_max_luminance(&drm_fd->hdr_metadata);
 
     gsr_monitor_hdr_info monitor_hdr_info;
     if(gsr_window_get_monitor_hdr_info(self->params.egl->window, self->params.display_to_capture, &monitor_hdr_info)) {
         if(monitor_hdr_info.sdr_white_luminance > 0.0f)
-            sdr_white_luminance = monitor_hdr_info.sdr_white_luminance;
+            *sdr_white_luminance = monitor_hdr_info.sdr_white_luminance;
         if(monitor_hdr_info.max_peak_luminance > 0.0f)
-            hdr_peak_luminance = monitor_hdr_info.max_peak_luminance;
+            *hdr_peak_luminance = monitor_hdr_info.max_peak_luminance;
     }
 
-    if(hdr_peak_luminance <= 0.0f)
-        hdr_peak_luminance = HDR_PEAK_LUMINANCE_FALLBACK;
+    if(*hdr_peak_luminance <= 0.0f)
+        *hdr_peak_luminance = HDR_PEAK_LUMINANCE_FALLBACK;
 
-    if(sdr_white_luminance > hdr_peak_luminance)
-        sdr_white_luminance = hdr_peak_luminance;
+    if(*sdr_white_luminance <= 0.0f)
+        *sdr_white_luminance = SDR_WHITE_LUMINANCE_REFERENCE;
 
-    gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, true, hdr_peak_luminance, sdr_white_luminance);
+    if(*sdr_white_luminance > *hdr_peak_luminance)
+        *sdr_white_luminance = *hdr_peak_luminance;
+}
 
-    if(!self->tone_mapping_message_shown) {
+static void gsr_capture_kms_update_hdr_color_transforms(gsr_capture_kms *self, gsr_color_conversion *color_conversion, const gsr_kms_response_item *drm_fd) {
+    const bool plane_is_hdr = drm_plane_is_hdr(drm_fd);
+    gsr_color_conversion_enable_gamma_lut(color_conversion, plane_is_hdr && self->gamma_lut_blob_id != 0);
+
+    float night_light_matrix[9];
+    const bool night_light = self->kde_night_light && gsr_kde_night_light_get_inverse_matrix(self->kde_night_light, night_light_matrix);
+    if(night_light && !self->night_light_message_shown) {
+        self->night_light_message_shown = true;
+        fprintf(stderr, "gsr info: gsr_capture_kms_update_hdr_color_transforms: night light is active, removing the night light tint from the capture\n");
+    }
+
+    float sdr_white_luminance = 0.0f;
+    float hdr_peak_luminance = 0.0f;
+    gsr_capture_kms_get_monitor_luminances(self, drm_fd, &sdr_white_luminance, &hdr_peak_luminance);
+
+    /* Hdr passthrough: the compositor composites sdr white at the monitors sdr white luminance while the video should have
+       sdr white at the reference luminance (203 nits), so the luminance of the video is scaled to match that */
+    float luminance_scale = 1.0f;
+    if(self->params.hdr && plane_is_hdr) {
+        luminance_scale = SDR_WHITE_LUMINANCE_REFERENCE / sdr_white_luminance;
+        if(luminance_scale != 1.0f && !self->hdr_luminance_message_shown) {
+            self->hdr_luminance_message_shown = true;
+            fprintf(stderr, "gsr info: gsr_capture_kms_update_hdr_color_transforms: scaling the luminance of the hdr video from sdr white at %d nits to sdr white at %d nits (hdr peak luminance: %d nits)\n",
+                (int)sdr_white_luminance, (int)SDR_WHITE_LUMINANCE_REFERENCE, (int)(hdr_peak_luminance * luminance_scale));
+        }
+    }
+
+    const bool tone_map_hdr_to_sdr = !self->params.hdr && plane_is_hdr;
+    gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, tone_map_hdr_to_sdr, hdr_peak_luminance, sdr_white_luminance);
+    if(tone_map_hdr_to_sdr && !self->tone_mapping_message_shown) {
         self->tone_mapping_message_shown = true;
-        fprintf(stderr, "gsr info: gsr_capture_kms_update_hdr_to_sdr_tone_mapping: the monitor is in hdr mode, tone mapping the hdr content to sdr (sdr white luminance: %d nits, hdr peak luminance: %d nits). Record with -k hevc_hdr or -k av1_hdr video codec option to record hdr instead\n",
-            (int)(sdr_white_luminance <= 0.0f ? 203.0f : sdr_white_luminance), (int)hdr_peak_luminance);
+        fprintf(stderr, "gsr info: gsr_capture_kms_update_hdr_color_transforms: the monitor is in hdr mode, tone mapping the hdr content to sdr (sdr white luminance: %d nits, hdr peak luminance: %d nits). Record with -k hevc_hdr or -k av1_hdr video codec option to record hdr instead\n",
+            (int)sdr_white_luminance, (int)hdr_peak_luminance);
+    }
+
+    if(night_light || luminance_scale != 1.0f) {
+        float color_matrix[9] = {
+            luminance_scale, 0.0f, 0.0f,
+            0.0f, luminance_scale, 0.0f,
+            0.0f, 0.0f, luminance_scale
+        };
+        if(night_light) {
+            for(int i = 0; i < 9; ++i) {
+                color_matrix[i] = night_light_matrix[i] * luminance_scale;
+            }
+        }
+        gsr_color_conversion_set_color_matrix(color_conversion, color_matrix, plane_is_hdr);
+    } else {
+        gsr_color_conversion_set_color_matrix(color_conversion, NULL, false);
     }
 }
 
@@ -458,6 +483,11 @@ static void gsr_kms_set_hdr_metadata(gsr_capture_kms *self, const gsr_kms_respon
 
     self->hdr_metadata_set = true;
     self->hdr_metadata = drm_fd->hdr_metadata;
+
+    float sdr_white_luminance = 0.0f;
+    float hdr_peak_luminance = 0.0f;
+    gsr_capture_kms_get_monitor_luminances(self, drm_fd, &sdr_white_luminance, &hdr_peak_luminance);
+    self->hdr_video_max_luminance = hdr_peak_luminance * (SDR_WHITE_LUMINANCE_REFERENCE / sdr_white_luminance);
 }
 
 static vec2i swap_vec2i(vec2i value) {
@@ -658,7 +688,7 @@ static void render_drm_cursor(gsr_capture_kms *self, gsr_color_conversion *color
     if(cursor_image)
         self->params.egl->eglDestroyImage(self->params.egl->egl_display, cursor_image);
 
-    gsr_capture_kms_update_hdr_to_sdr_tone_mapping(self, color_conversion, cursor_drm_fd);
+    gsr_capture_kms_update_hdr_color_transforms(self, color_conversion, cursor_drm_fd);
 
     self->params.egl->glEnable(GL_SCISSOR_TEST);
     self->params.egl->glScissor(target_pos.x, target_pos.y, output_size.x, output_size.y);
@@ -798,7 +828,7 @@ static void render_monitor_plane(gsr_capture_kms *self, gsr_color_conversion *co
         self->params.egl->eglDestroyImage(self->params.egl->egl_display, image);
     }
 
-    gsr_capture_kms_update_hdr_to_sdr_tone_mapping(self, color_conversion, self->drm_fd);
+    gsr_capture_kms_update_hdr_color_transforms(self, color_conversion, self->drm_fd);
 
     gsr_color_conversion_draw(color_conversion, self->external_texture_fallback ? self->external_input_texture_id : self->input_texture_id,
         self->target_pos, self->output_size,
@@ -858,7 +888,7 @@ static void render_drm_plane(gsr_capture_kms *self, gsr_color_conversion *color_
     gsr_capture_kms_bind_image_to_input_texture_with_fallback(self, image);
     self->params.egl->eglDestroyImage(self->params.egl->egl_display, image);
 
-    gsr_capture_kms_update_hdr_to_sdr_tone_mapping(self, color_conversion, plane_drm_fd);
+    gsr_capture_kms_update_hdr_color_transforms(self, color_conversion, plane_drm_fd);
 
     self->params.egl->glEnable(GL_SCISSOR_TEST);
     self->params.egl->glScissor(target_pos.x, target_pos.y, output_size.x, output_size.y);
@@ -929,7 +959,7 @@ static int gsr_capture_kms_capture(gsr_capture *cap, gsr_capture_metadata *captu
 
     gsr_color_conversion_set_hdr_to_sdr_tone_mapping(color_conversion, false, 0.0f, 0.0f);
     gsr_color_conversion_enable_gamma_lut(color_conversion, false);
-    gsr_color_conversion_set_night_light_matrix(color_conversion, NULL, false);
+    gsr_color_conversion_set_color_matrix(color_conversion, NULL, false);
 
     //self->params.egl->glFlush();
     //self->params.egl->glFinish();
@@ -968,6 +998,11 @@ static bool gsr_capture_kms_set_hdr_metadata(gsr_capture *cap, AVMasteringDispla
 
     mastering_display_metadata->min_luminance = av_make_q(self->hdr_metadata.hdmi_metadata_type1.min_display_mastering_luminance, 10000);
     mastering_display_metadata->max_luminance = av_make_q(self->hdr_metadata.hdmi_metadata_type1.max_display_mastering_luminance, 1);
+
+    if(self->hdr_video_max_luminance > 0.0f) {
+        light_metadata->MaxCLL = (unsigned int)(self->hdr_video_max_luminance + 0.5f);
+        mastering_display_metadata->max_luminance = av_make_q((int)(self->hdr_video_max_luminance + 0.5f), 1);
+    }
 
     mastering_display_metadata->has_primaries = true;
     mastering_display_metadata->has_luminance = true;
