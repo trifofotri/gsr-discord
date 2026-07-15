@@ -7,8 +7,8 @@ tests/compile_commands.json
 **/xdg-output-unstable-v1-client-protocol.h
 **/xdg-output-unstable-v1-protocol.c
 
-**/kde-output-device-v2-client-protocol.h
-**/kde-output-device-v2-protocol.c
+**/color-management-v1-client-protocol.h
+**/color-management-v1-protocol.c
 
 .clangd/
 .cache/

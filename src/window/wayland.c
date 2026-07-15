@@ -8,10 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
 #include <wayland-client.h>
 #include <wayland-egl.h>
 #include "xdg-output-unstable-v1-client-protocol.h"
-#include "kde-output-device-v2-client-protocol.h"
+#include "color-management-v1-client-protocol.h"
 
 #define GSR_MAX_OUTPUTS 32
 
@@ -26,24 +27,13 @@ typedef struct {
     vec2i logical_size;
     int32_t transform;
     char *name;
+    struct wp_color_management_output_v1 *color_management_output;
+    struct wp_image_description_v1 *image_description;
+    struct wp_image_description_info_v1 *image_description_info;
+    uint32_t reference_luminance; /* cd/m² (nits) */
+    uint32_t max_luminance;       /* cd/m² (nits) */
+    bool luminance_valid;
 } gsr_wayland_output;
-
-#define KDE_PLASMA_ASSUMED_MONITOR_PEAK_LUMINANCE 800.0f
-#define KDE_BRIGHTNESS_MULTIPLIER_MAX 10000
-
-typedef struct {
-    struct kde_output_device_v2 *device;
-    char *name;
-    bool hdr_enabled;
-    uint32_t sdr_brightness;              /* cd/m² (nits) */
-    uint32_t max_peak_brightness;         /* cd/m² (nits) */
-    int32_t max_peak_brightness_override; /* cd/m² (nits), -1 if not set */
-    uint32_t brightness;                  /* 0-10000 */
-    uint32_t dimming;                     /* 0-10000 */
-    struct kde_output_device_mode_v2 **modes;
-    int num_modes;
-    int modes_capacity;
-} gsr_kde_output_device;
 
 struct gsr_window_wayland {
     struct wl_display *display;
@@ -54,8 +44,7 @@ struct gsr_window_wayland {
     gsr_wayland_output outputs[GSR_MAX_OUTPUTS];
     int num_outputs;
     struct zxdg_output_manager_v1 *xdg_output_manager;
-    struct kde_output_device_registry_v2 *kde_output_device_registry;
-    gsr_kde_output_device kde_output_devices[GSR_MAX_OUTPUTS];
+    struct wp_color_manager_v1 *color_manager;
 };
 
 static void output_handle_geometry(void *data, struct wl_output *wl_output,
@@ -119,231 +108,104 @@ static const struct wl_output_listener output_listener = {
     .description = output_handle_description,
 };
 
-static void kde_output_device_free(gsr_kde_output_device *device) {
-    if(device->device) {
-        kde_output_device_v2_destroy(device->device);
-        device->device = NULL;
-    }
-
-    if(device->name) {
-        free(device->name);
-        device->name = NULL;
-    }
-
-    for(int i = 0; i < device->num_modes; ++i) {
-        kde_output_device_mode_v2_destroy(device->modes[i]);
-    }
-    free(device->modes);
-    device->modes = NULL;
-    device->num_modes = 0;
-    device->modes_capacity = 0;
+static void image_description_info_handle_done(void *data, struct wp_image_description_info_v1 *info) {
+    gsr_wayland_output *output = data;
+    wp_image_description_info_v1_destroy(info);
+    output->image_description_info = NULL;
+    output->luminance_valid = output->reference_luminance > 0 || output->max_luminance > 0;
 }
 
-static void kde_output_device_handle_geometry(void *data, struct kde_output_device_v2 *device, int32_t x, int32_t y, int32_t physical_width, int32_t physical_height,
-    int32_t subpixel, const char *make, const char *model, int32_t transform) {
-    (void)data; (void)device; (void)x; (void)y; (void)physical_width; (void)physical_height; (void)subpixel; (void)make; (void)model; (void)transform;
+static void image_description_info_handle_icc_file(void *data, struct wp_image_description_info_v1 *info, int32_t icc, uint32_t icc_size) {
+    (void)data; (void)info; (void)icc_size;
+    close(icc);
 }
 
-static void kde_output_device_handle_current_mode(void *data, struct kde_output_device_v2 *device, struct kde_output_device_mode_v2 *mode) {
-    (void)data; (void)device; (void)mode;
+static void image_description_info_handle_primaries(void *data, struct wp_image_description_info_v1 *info, int32_t r_x, int32_t r_y, int32_t g_x, int32_t g_y, int32_t b_x, int32_t b_y, int32_t w_x, int32_t w_y) {
+    (void)data; (void)info; (void)r_x; (void)r_y; (void)g_x; (void)g_y; (void)b_x; (void)b_y; (void)w_x; (void)w_y;
 }
 
-/* The mode objects can't be destroyed here because later events reference them (current_mode).
-   They are destroyed when the output device is destroyed. */
-static void kde_output_device_handle_mode(void *data, struct kde_output_device_v2 *device, struct kde_output_device_mode_v2 *mode) {
-    (void)device;
-    gsr_kde_output_device *gsr_device = data;
-
-    if(gsr_device->num_modes == gsr_device->modes_capacity) {
-        const int new_capacity = gsr_device->modes_capacity == 0 ? 128 : gsr_device->modes_capacity * 2;
-        struct kde_output_device_mode_v2 **modes = realloc(gsr_device->modes, new_capacity * sizeof(struct kde_output_device_mode_v2*));
-        if(!modes)
-            return;
-        gsr_device->modes = modes;
-        gsr_device->modes_capacity = new_capacity;
-    }
-
-    gsr_device->modes[gsr_device->num_modes] = mode;
-    ++gsr_device->num_modes;
+static void image_description_info_handle_uint_noop(void *data, struct wp_image_description_info_v1 *info, uint32_t value) {
+    (void)data; (void)info; (void)value;
 }
 
-static void kde_output_device_handle_done(void *data, struct kde_output_device_v2 *device) {
-    (void)data; (void)device;
+static void image_description_info_handle_luminances(void *data, struct wp_image_description_info_v1 *info, uint32_t min_lum, uint32_t max_lum, uint32_t reference_lum) {
+    (void)info; (void)min_lum;
+    gsr_wayland_output *output = data;
+    output->max_luminance = max_lum;
+    output->reference_luminance = reference_lum;
 }
 
-static void kde_output_device_handle_scale(void *data, struct kde_output_device_v2 *device, wl_fixed_t factor) {
-    (void)data; (void)device; (void)factor;
+static void image_description_info_handle_target_luminance(void *data, struct wp_image_description_info_v1 *info, uint32_t min_lum, uint32_t max_lum) {
+    (void)data; (void)info; (void)min_lum; (void)max_lum;
 }
 
-static void kde_output_device_handle_edid(void *data, struct kde_output_device_v2 *device, const char *raw) {
-    (void)data; (void)device; (void)raw;
-}
-
-static void kde_output_device_handle_enabled(void *data, struct kde_output_device_v2 *device, int32_t enabled) {
-    (void)data; (void)device; (void)enabled;
-}
-
-static void kde_output_device_handle_string_noop(void *data, struct kde_output_device_v2 *device, const char *value) {
-    (void)data; (void)device; (void)value;
-}
-
-static void kde_output_device_handle_uint_noop(void *data, struct kde_output_device_v2 *device, uint32_t value) {
-    (void)data; (void)device; (void)value;
-}
-
-static void kde_output_device_handle_name(void *data, struct kde_output_device_v2 *device, const char *name) {
-    (void)device;
-    gsr_kde_output_device *gsr_device = data;
-    if(gsr_device->name) {
-        free(gsr_device->name);
-        gsr_device->name = NULL;
-    }
-    gsr_device->name = strdup(name);
-}
-
-static void kde_output_device_handle_high_dynamic_range(void *data, struct kde_output_device_v2 *device, uint32_t hdr_enabled) {
-    (void)device;
-    gsr_kde_output_device *gsr_device = data;
-    gsr_device->hdr_enabled = hdr_enabled != 0;
-}
-
-static void kde_output_device_handle_sdr_brightness(void *data, struct kde_output_device_v2 *device, uint32_t sdr_brightness) {
-    (void)device;
-    gsr_kde_output_device *gsr_device = data;
-    gsr_device->sdr_brightness = sdr_brightness;
-}
-
-static void kde_output_device_handle_brightness_metadata(void *data, struct kde_output_device_v2 *device, uint32_t max_peak_brightness, uint32_t max_frame_average_brightness, uint32_t min_brightness) {
-    (void)device; (void)max_frame_average_brightness; (void)min_brightness;
-    gsr_kde_output_device *gsr_device = data;
-    gsr_device->max_peak_brightness = max_peak_brightness;
-}
-
-static void kde_output_device_handle_brightness_overrides(void *data, struct kde_output_device_v2 *device, int32_t max_peak_brightness, int32_t max_average_brightness, int32_t min_brightness) {
-    (void)device; (void)max_average_brightness; (void)min_brightness;
-    gsr_kde_output_device *gsr_device = data;
-    gsr_device->max_peak_brightness_override = max_peak_brightness;
-}
-
-static void kde_output_device_handle_brightness(void *data, struct kde_output_device_v2 *device, uint32_t brightness) {
-    (void)device;
-    gsr_kde_output_device *gsr_device = data;
-    gsr_device->brightness = brightness;
-}
-
-static void kde_output_device_handle_dimming(void *data, struct kde_output_device_v2 *device, uint32_t multiplier) {
-    (void)device;
-    gsr_kde_output_device *gsr_device = data;
-    gsr_device->dimming = multiplier;
-}
-
-static void kde_output_device_handle_max_bits_per_color_range(void *data, struct kde_output_device_v2 *device, uint32_t min_value, uint32_t max_value) {
-    (void)data; (void)device; (void)min_value; (void)max_value;
-}
-
-static void kde_output_device_handle_removed(void *data, struct kde_output_device_v2 *device) {
-    (void)device;
-    gsr_kde_output_device *gsr_device = data;
-    kde_output_device_free(gsr_device);
-}
-
-static const struct kde_output_device_v2_listener kde_output_device_listener = {
-    .geometry = kde_output_device_handle_geometry,
-    .current_mode = kde_output_device_handle_current_mode,
-    .mode = kde_output_device_handle_mode,
-    .done = kde_output_device_handle_done,
-    .scale = kde_output_device_handle_scale,
-    .edid = kde_output_device_handle_edid,
-    .enabled = kde_output_device_handle_enabled,
-    .uuid = kde_output_device_handle_string_noop,
-    .serial_number = kde_output_device_handle_string_noop,
-    .eisa_id = kde_output_device_handle_string_noop,
-    .capabilities = kde_output_device_handle_uint_noop,
-    .overscan = kde_output_device_handle_uint_noop,
-    .vrr_policy = kde_output_device_handle_uint_noop,
-    .rgb_range = kde_output_device_handle_uint_noop,
-    .name = kde_output_device_handle_name,
-    .high_dynamic_range = kde_output_device_handle_high_dynamic_range,
-    .sdr_brightness = kde_output_device_handle_sdr_brightness,
-    .wide_color_gamut = kde_output_device_handle_uint_noop,
-    .auto_rotate_policy = kde_output_device_handle_uint_noop,
-    .icc_profile_path = kde_output_device_handle_string_noop,
-    .brightness_metadata = kde_output_device_handle_brightness_metadata,
-    .brightness_overrides = kde_output_device_handle_brightness_overrides,
-    .sdr_gamut_wideness = kde_output_device_handle_uint_noop,
-    .color_profile_source = kde_output_device_handle_uint_noop,
-    .brightness = kde_output_device_handle_brightness,
-    .color_power_tradeoff = kde_output_device_handle_uint_noop,
-    .dimming = kde_output_device_handle_dimming,
-    .replication_source = kde_output_device_handle_string_noop,
-    .ddc_ci_allowed = kde_output_device_handle_uint_noop,
-    .max_bits_per_color = kde_output_device_handle_uint_noop,
-    .max_bits_per_color_range = kde_output_device_handle_max_bits_per_color_range,
-    .automatic_max_bits_per_color_limit = kde_output_device_handle_uint_noop,
-    .edr_policy = kde_output_device_handle_uint_noop,
-    .sharpness = kde_output_device_handle_uint_noop,
-    .priority = kde_output_device_handle_uint_noop,
-    .auto_brightness = kde_output_device_handle_uint_noop,
-    .removed = kde_output_device_handle_removed,
-    .hdr_icc_profile_path = kde_output_device_handle_string_noop,
-    .hdr_color_profile_source = kde_output_device_handle_uint_noop,
-    .abm_level = kde_output_device_handle_uint_noop,
+static const struct wp_image_description_info_v1_listener image_description_info_listener = {
+    .done = image_description_info_handle_done,
+    .icc_file = image_description_info_handle_icc_file,
+    .primaries = image_description_info_handle_primaries,
+    .primaries_named = image_description_info_handle_uint_noop,
+    .tf_power = image_description_info_handle_uint_noop,
+    .tf_named = image_description_info_handle_uint_noop,
+    .luminances = image_description_info_handle_luminances,
+    .target_primaries = image_description_info_handle_primaries,
+    .target_luminance = image_description_info_handle_target_luminance,
+    .target_max_cll = image_description_info_handle_uint_noop,
+    .target_max_fall = image_description_info_handle_uint_noop,
 };
 
-static void gsr_window_wayland_add_kde_output_device(gsr_window_wayland *self, struct kde_output_device_v2 *device) {
-    gsr_kde_output_device *gsr_device = NULL;
-    for(int i = 0; i < GSR_MAX_OUTPUTS; ++i) {
-        if(!self->kde_output_devices[i].device) {
-            gsr_device = &self->kde_output_devices[i];
-            break;
-        }
-    }
-
-    if(!gsr_device) {
-        fprintf(stderr, "gsr warning: gsr_window_wayland_add_kde_output_device: reached maximum outputs (%d), ignoring output\n", GSR_MAX_OUTPUTS);
-        kde_output_device_v2_destroy(device);
-        return;
-    }
-
-    if(gsr_device->name) {
-        free(gsr_device->name);
-        gsr_device->name = NULL;
-    }
-
-    *gsr_device = (gsr_kde_output_device) {
-        .device = device,
-        .name = NULL,
-        .hdr_enabled = false,
-        .sdr_brightness = 0,
-        .max_peak_brightness = 0,
-        .max_peak_brightness_override = -1,
-        .brightness = KDE_BRIGHTNESS_MULTIPLIER_MAX,
-        .dimming = KDE_BRIGHTNESS_MULTIPLIER_MAX,
-        .modes = NULL,
-        .num_modes = 0,
-        .modes_capacity = 0,
-    };
-    kde_output_device_v2_add_listener(device, &kde_output_device_listener, gsr_device);
+static void image_description_handle_failed(void *data, struct wp_image_description_v1 *image_description, uint32_t cause, const char *msg) {
+    (void)cause; (void)msg;
+    gsr_wayland_output *output = data;
+    wp_image_description_v1_destroy(image_description);
+    output->image_description = NULL;
 }
 
-static void kde_output_device_registry_handle_output(void *data, struct kde_output_device_registry_v2 *registry, struct kde_output_device_v2 *output) {
-    (void)registry;
-    gsr_window_wayland *self = data;
-    gsr_window_wayland_add_kde_output_device(self, output);
+static void image_description_handle_ready(void *data, struct wp_image_description_v1 *image_description, uint32_t identity) {
+    (void)identity;
+    gsr_wayland_output *output = data;
+    if(output->image_description_info)
+        wp_image_description_info_v1_destroy(output->image_description_info);
+
+    output->image_description_info = wp_image_description_v1_get_information(image_description);
+    wp_image_description_info_v1_add_listener(output->image_description_info, &image_description_info_listener, output);
+    wp_image_description_v1_destroy(image_description);
+    output->image_description = NULL;
 }
 
-static void kde_output_device_registry_handle_finished(void *data, struct kde_output_device_registry_v2 *registry) {
-    (void)registry;
-    gsr_window_wayland *self = data;
-    if(self->kde_output_device_registry) {
-        kde_output_device_registry_v2_destroy(self->kde_output_device_registry);
-        self->kde_output_device_registry = NULL;
+static void image_description_handle_ready2(void *data, struct wp_image_description_v1 *image_description, uint32_t identity_hi, uint32_t identity_lo) {
+    (void)identity_lo;
+    image_description_handle_ready(data, image_description, identity_hi);
+}
+
+static const struct wp_image_description_v1_listener image_description_listener = {
+    .failed = image_description_handle_failed,
+    .ready = image_description_handle_ready,
+    .ready2 = image_description_handle_ready2,
+};
+
+static void gsr_wayland_output_fetch_image_description(gsr_wayland_output *output) {
+    if(output->image_description_info) {
+        wp_image_description_info_v1_destroy(output->image_description_info);
+        output->image_description_info = NULL;
     }
+
+    if(output->image_description) {
+        wp_image_description_v1_destroy(output->image_description);
+        output->image_description = NULL;
+    }
+
+    output->image_description = wp_color_management_output_v1_get_image_description(output->color_management_output);
+    wp_image_description_v1_add_listener(output->image_description, &image_description_listener, output);
 }
 
-static const struct kde_output_device_registry_v2_listener kde_output_device_registry_listener = {
-    .finished = kde_output_device_registry_handle_finished,
-    .output = kde_output_device_registry_handle_output,
+static void color_management_output_handle_image_description_changed(void *data, struct wp_color_management_output_v1 *color_management_output) {
+    (void)color_management_output;
+    gsr_wayland_output *output = data;
+    gsr_wayland_output_fetch_image_description(output);
+}
+
+static const struct wp_color_management_output_v1_listener color_management_output_listener = {
+    .image_description_changed = color_management_output_handle_image_description_changed,
 };
 
 static void registry_add_object(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
@@ -387,26 +249,11 @@ static void registry_add_object(void *data, struct wl_registry *registry, uint32
             return;
 
         window_wayland->xdg_output_manager = wl_registry_bind(registry, name, &zxdg_output_manager_v1_interface, 1);
-    } else if(strcmp(interface, kde_output_device_registry_v2_interface.name) == 0) {
-        if(window_wayland->kde_output_device_registry)
+    } else if(strcmp(interface, wp_color_manager_v1_interface.name) == 0) {
+        if(window_wayland->color_manager)
             return;
 
-        uint32_t bind_version = version;
-        if(bind_version > (uint32_t)kde_output_device_registry_v2_interface.version)
-            bind_version = kde_output_device_registry_v2_interface.version;
-
-        window_wayland->kde_output_device_registry = wl_registry_bind(registry, name, &kde_output_device_registry_v2_interface, bind_version);
-        kde_output_device_registry_v2_add_listener(window_wayland->kde_output_device_registry, &kde_output_device_registry_listener, window_wayland);
-    } else if(strcmp(interface, kde_output_device_v2_interface.name) == 0) {
-        if(version < 3)
-            return;
-
-        uint32_t bind_version = version;
-        if(bind_version > (uint32_t)kde_output_device_v2_interface.version)
-            bind_version = kde_output_device_v2_interface.version;
-
-        struct kde_output_device_v2 *device = wl_registry_bind(registry, name, &kde_output_device_v2_interface, bind_version);
-        gsr_window_wayland_add_kde_output_device(window_wayland, device);
+        window_wayland->color_manager = wl_registry_bind(registry, name, &wp_color_manager_v1_interface, 1);
     }
 }
 
@@ -488,6 +335,22 @@ static void gsr_window_wayland_set_monitor_outputs_from_xdg_output(gsr_window_wa
 //     return arg1->logical_pos.y - arg2->logical_pos.y;
 // }
 
+static void gsr_window_wayland_setup_color_management_outputs(gsr_window_wayland *self) {
+    if(!self->color_manager)
+        return;
+
+    for(int i = 0; i < self->num_outputs; ++i) {
+        gsr_wayland_output *output = &self->outputs[i];
+        output->color_management_output = wp_color_manager_v1_get_output(self->color_manager, output->output);
+        wp_color_management_output_v1_add_listener(output->color_management_output, &color_management_output_listener, output);
+        gsr_wayland_output_fetch_image_description(output);
+    }
+
+    // Fetch the image descriptions and then the image description infos
+    wl_display_roundtrip(self->display);
+    wl_display_roundtrip(self->display);
+}
+
 static void gsr_window_wayland_set_monitor_real_positions(gsr_window_wayland *self) {
     gsr_wayland_output *sorted_outputs[GSR_MAX_OUTPUTS];
     for(int i = 0; i < self->num_outputs; ++i) {
@@ -524,6 +387,26 @@ static void gsr_window_wayland_deinit(gsr_window_wayland *self) {
     }
 
     for(int i = 0; i < self->num_outputs; ++i) {
+        if(self->outputs[i].image_description_info) {
+            wp_image_description_info_v1_destroy(self->outputs[i].image_description_info);
+            self->outputs[i].image_description_info = NULL;
+        }
+
+        if(self->outputs[i].image_description) {
+            wp_image_description_v1_destroy(self->outputs[i].image_description);
+            self->outputs[i].image_description = NULL;
+        }
+
+        if(self->outputs[i].color_management_output) {
+            wp_color_management_output_v1_destroy(self->outputs[i].color_management_output);
+            self->outputs[i].color_management_output = NULL;
+        }
+
+        if(self->outputs[i].xdg_output) {
+            zxdg_output_v1_destroy(self->outputs[i].xdg_output);
+            self->outputs[i].xdg_output = NULL;
+        }
+
         if(self->outputs[i].output) {
             wl_output_destroy(self->outputs[i].output);
             self->outputs[i].output = NULL;
@@ -533,21 +416,12 @@ static void gsr_window_wayland_deinit(gsr_window_wayland *self) {
             free(self->outputs[i].name);
             self->outputs[i].name = NULL;
         }
-
-        if(self->outputs[i].xdg_output) {
-            zxdg_output_v1_destroy(self->outputs[i].xdg_output);
-            self->outputs[i].output = NULL;
-        }
     }
     self->num_outputs = 0;
 
-    for(int i = 0; i < GSR_MAX_OUTPUTS; ++i) {
-        kde_output_device_free(&self->kde_output_devices[i]);
-    }
-
-    if(self->kde_output_device_registry) {
-        kde_output_device_registry_v2_destroy(self->kde_output_device_registry);
-        self->kde_output_device_registry = NULL;
+    if(self->color_manager) {
+        wp_color_manager_v1_destroy(self->color_manager);
+        self->color_manager = NULL;
     }
 
     if(self->xdg_output_manager) {
@@ -588,6 +462,7 @@ static bool gsr_window_wayland_init(gsr_window_wayland *self) {
     wl_display_roundtrip(self->display);
 
     gsr_window_wayland_set_monitor_outputs_from_xdg_output(self);
+    gsr_window_wayland_setup_color_management_outputs(self);
     gsr_window_wayland_set_monitor_real_positions(self);
 
     if(!self->compositor) {
@@ -698,20 +573,13 @@ static void gsr_window_wayland_for_each_active_monitor_output_cached(const gsr_w
 
 static bool gsr_window_wayland_get_monitor_hdr_info(const gsr_window *window, const char *monitor_name, gsr_monitor_hdr_info *hdr_info) {
     const gsr_window_wayland *self = window->priv;
-    for(int i = 0; i < GSR_MAX_OUTPUTS; ++i) {
-        const gsr_kde_output_device *device = &self->kde_output_devices[i];
-        if(!device->device || !device->name || strcmp(device->name, monitor_name) != 0)
+    for(int i = 0; i < self->num_outputs; ++i) {
+        const gsr_wayland_output *output = &self->outputs[i];
+        if(!output->name || strcmp(output->name, monitor_name) != 0 || !output->luminance_valid)
             continue;
 
-        if(device->sdr_brightness == 0)
-            return false;
-
-        const float brightness_multiplier = ((float)device->brightness / (float)KDE_BRIGHTNESS_MULTIPLIER_MAX) * ((float)device->dimming / (float)KDE_BRIGHTNESS_MULTIPLIER_MAX);
-        hdr_info->hdr_enabled = device->hdr_enabled;
-        hdr_info->sdr_white_luminance = (float)device->sdr_brightness * brightness_multiplier;
-        hdr_info->max_peak_luminance = device->max_peak_brightness_override > 0 ? (float)device->max_peak_brightness_override : (float)device->max_peak_brightness;
-        if(hdr_info->max_peak_luminance <= 0.0f)
-            hdr_info->max_peak_luminance = KDE_PLASMA_ASSUMED_MONITOR_PEAK_LUMINANCE;
+        hdr_info->sdr_white_luminance = output->reference_luminance;
+        hdr_info->max_peak_luminance = output->max_luminance;
         return true;
     }
     return false;

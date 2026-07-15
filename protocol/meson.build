@@ -16,7 +16,7 @@ wayland_scanner_client = generator(
 
 protocols = [
 	'xdg-output-unstable-v1.xml',
-	'kde-output-device-v2.xml',
+	'color-management-v1.xml',
 ]
 
 protocol_src = []
