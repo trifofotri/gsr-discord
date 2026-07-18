@@ -1040,20 +1040,19 @@ static bool add_hdr_metadata_to_video_stream(gsr_capture *cap, AVStream *video_s
 
 static void set_format_context_options(AVFormatContext *av_format_context) {
     if(LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(62, 6, 101)) {
-        bool hybrid_fragmented_available = false;
         av_opt_set(av_format_context->priv_data, "use_editlist", "1", 0);
         const AVOption *opt = av_opt_find(av_format_context->priv_data, "movflags", NULL, 0, 0);
         if (opt && opt->unit) {
             const AVOption *flag = av_opt_find(av_format_context->priv_data, "hybrid_fragmented", opt->unit, 0, 0);
-            if (flag) {
-                hybrid_fragmented_available = true;
+            if (flag)
                 av_opt_set(av_format_context->priv_data, "movflags", "+hybrid_fragmented", 0);
-            }
         }
-
-        if(!hybrid_fragmented_available)
-            fprintf(stderr, "gsr warning: hybrid_fragmented movflags is not available in your FFmpeg version. If you experience stutter in the mp4 file then update your FFmpeg to at least version 8 or record to a mkv file\n");
     } else {
+        const AVOutputFormat *output_format = av_format_context->oformat;
+        const char *file_extension = output_format->extensions ? output_format->extensions : "";
+        if(strcmp(file_extension, "mp4") != 0 && strcmp(file_extension, "mov") != 0)
+            return;
+
         fprintf(stderr, "gsr warning: your FFmpeg version is known to be buggy (it doesn't have working hybrid_fragmented movflags). If you experience stutter in the mp4 file then update your FFmpeg to at least version 8 or record to a mkv file\n");
     }
 }
