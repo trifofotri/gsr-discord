@@ -1,6 +1,19 @@
 ![](https://dec05eba.com/images/gpu_screen_recorder_logo_small.png)
 
 # GPU Screen Recorder
+
+> [!IMPORTANT]
+> This repository is an unofficial, independently maintained fork. It preserves
+> the complete upstream history and is not affiliated with or endorsed by the
+> original author. The official source is at
+> [git.dec05eba.com](https://git.dec05eba.com/gpu-screen-recorder/).
+
+This fork is based on upstream commit
+`319097c1d24254dafd7c7c022e92001e594faf76`. Its current downstream change
+resolves the Wayland host bridge from the running Flatpak's own deployment,
+allowing both per-user and system installations without a hardcoded application
+ID or installation root. See [CUSTOM.md](CUSTOM.md) for scope and attribution.
+
 This is a screen recorder that has minimal impact on system performance by recording your monitor using the GPU only,
 similar to shadowplay on windows. This is the fastest screen recording tool for Linux.
 
@@ -211,7 +224,10 @@ For example it can cause your computer to freeze when recording certain games.
 This software is licensed under GPL-3.0-only, see the LICENSE file for more information.
 
 # Reporting bugs, contributing patches, questions or donation
-See [https://git.dec05eba.com/?p=about](https://git.dec05eba.com/?p=about).
+Report fork-specific issues on
+[GitHub](https://github.com/antonlobanovskiy/gpu-screen-recorder/issues). For
+the original project, see
+[https://git.dec05eba.com/?p=about](https://git.dec05eba.com/?p=about).
 
 # Demo
 [![Click here to watch a demo video on youtube](https://img.youtube.com/vi/n5tm0g01n6A/0.jpg)](https://www.youtube.com/watch?v=n5tm0g01n6A)

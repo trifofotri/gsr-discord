@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
@@ -13,8 +14,66 @@
 
 #define GSR_UI_UNIX_SOCKET_DOMAIN_FD 3
 
-static const char *bridge_host_path =
-    "/var/lib/flatpak/app/com.dec05eba.gpu_screen_recorder/current/active/files/bin/gsr-wayland-bridge";
+static int unescape_key_file_value(char *value) {
+    char *source = value;
+    char *destination = value;
+    while(*source) {
+        if(*source != '\\') {
+            *destination++ = *source++;
+            continue;
+        }
+
+        ++source;
+        switch(*source) {
+            case 's': *destination++ = ' '; break;
+            case 'n': *destination++ = '\n'; break;
+            case 't': *destination++ = '\t'; break;
+            case 'r': *destination++ = '\r'; break;
+            case '\\': *destination++ = '\\'; break;
+            default: return 0;
+        }
+        ++source;
+    }
+    *destination = '\0';
+    return 1;
+}
+
+static int get_bridge_host_path(char *path, size_t path_size) {
+    FILE *flatpak_info = fopen("/.flatpak-info", "r");
+    if(!flatpak_info)
+        return 0;
+
+    char line[PATH_MAX];
+    char app_path[PATH_MAX] = {0};
+    int in_instance_group = 0;
+    int result = 0;
+    while(fgets(line, sizeof(line), flatpak_info)) {
+        if(!strchr(line, '\n') && !feof(flatpak_info))
+            break;
+        line[strcspn(line, "\r\n")] = '\0';
+
+        if(line[0] == '[') {
+            in_instance_group = strcmp(line, "[Instance]") == 0;
+            continue;
+        }
+        if(!in_instance_group)
+            continue;
+
+        const char prefix[] = "app-path=";
+        if(strncmp(line, prefix, sizeof(prefix) - 1) != 0)
+            continue;
+
+        snprintf(app_path, sizeof(app_path), "%s", line + sizeof(prefix) - 1);
+    }
+
+    fclose(flatpak_info);
+    if(!unescape_key_file_value(app_path) || app_path[0] != '/')
+        return 0;
+
+    const int written = snprintf(path, path_size, "%s/bin/gsr-wayland-bridge", app_path);
+    result = written > 0 && (size_t)written < path_size;
+    return result;
+}
 
 static int recv_fd(int sock) {
     char dummy = 0;
@@ -44,6 +103,11 @@ static int recv_fd(int sock) {
 
 static struct wl_display* connect_via_bridge() {
     const char *wayland_display = getenv("WAYLAND_DISPLAY");
+    char bridge_host_path[PATH_MAX];
+    if(!get_bridge_host_path(bridge_host_path, sizeof(bridge_host_path))) {
+        fprintf(stderr, "WaylandHostBridge: failed to resolve the Flatpak app path\n");
+        return NULL;
+    }
 
     int sv[2];
     if(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv) != 0) {
