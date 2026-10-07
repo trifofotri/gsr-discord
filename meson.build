@@ -82,6 +82,8 @@ if build_machine.system() == 'linux'
     ]
 endif
 
+davecast_root = meson.project_source_root() / 'davecast'
+
 davecast_dep = declare_dependency(
     include_directories: include_directories(
         'davecast/include',
@@ -89,13 +91,13 @@ davecast_dep = declare_dependency(
         'davecast/third_party/libdave/cpp/includes',
     ),
     link_args: [
-        'davecast/build/libdavecast.a',
-        'davecast/third_party/libdave/cpp/build/libdave.a',
-        'davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libmlspp.a',
-        'davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libmls_ds.a',
-        'davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libhpke.a',
-        '/davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libbytes.a',
-        'davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libtls_syntax.a',
+        davecast_root / 'build/libdavecast.a',
+        davecast_root / 'third_party/libdave/cpp/build/libdave.a',
+        davecast_root / 'third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libmlspp.a',
+        davecast_root / 'third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libmls_ds.a',
+        davecast_root / 'third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libhpke.a',
+        davecast_root / 'third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libbytes.a',
+        davecast_root / 'third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libtls_syntax.a',
         '-lssl', '-lcrypto', '-lcurl',
     ],
 )
