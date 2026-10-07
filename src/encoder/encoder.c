@@ -120,6 +120,10 @@ void gsr_encoder_receive_packets(gsr_encoder *self, AVCodecContext *codec_contex
                 self->on_video_packet(self->on_video_packet_userdata, av_packet->data, av_packet->size, (av_packet->flags & AV_PKT_FLAG_KEY) != 0, av_packet->pts);
             }
             
+            if(stream_index != 0 && self->on_audio_packet) {
+                self->on_audio_packet(self->on_audio_packet_userdata, av_packet->data, av_packet->size, av_packet->pts, stream_index);
+            }
+
             if(self->replay_buffer) {
                 pthread_mutex_lock(&self->replay_mutex);
                 const double time_now = clock_get_monotonic_seconds();
@@ -257,4 +261,9 @@ bool gsr_encoder_set_recording_destination_first_frame_ts_filepath(gsr_encoder *
 void gsr_encoder_set_video_packet_callback(gsr_encoder *self, gsr_video_packet_callback cb, void *userdata) {
     self->on_video_packet = cb;
     self->on_video_packet_userdata = userdata;
+}
+
+void gsr_encoder_set_audio_packet_callback(gsr_encoder *self, gsr_audio_packet_callback cb, void *userdata) {
+    self->on_audio_packet = cb;
+    self->on_audio_packet_userdata = userdata;
 }

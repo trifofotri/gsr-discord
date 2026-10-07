@@ -133,6 +133,7 @@ static void get_monitor_by_position_callback(const gsr_monitor *monitor, void *u
     }
 }
 
+
 static char* av_error_to_string(int err) {
     if(av_strerror(err, av_error_buffer, sizeof(av_error_buffer)) < 0)
         strcpy(av_error_buffer, "Unknown error");
@@ -3774,6 +3775,16 @@ static void install_cuda_no_stable_perf_limit() {
     fclose(f);
 }
 
+static void on_discord_audio_packet(void *userdata, const uint8_t *data, int size, int64_t pts, int stream_index) {
+    (void)userdata; (void)pts; (void)stream_index;
+    if(!g_discord_session || !g_discord_session->live) return;
+    if(g_discord_session->dave_active && !dcast_dave_state.established) return;
+
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t pts_us = (uint64_t)ts.tv_sec * 1000000ull + ts.tv_nsec / 1000ull;
+    dcast_send_audio(g_discord_session, data, size, pts_us);
+}
+
 int main(int argc, char **argv) {
     setlocale(LC_ALL, "C"); // Sigh... stupid C
 #ifdef __GLIBC__
@@ -4034,6 +4045,7 @@ int main(int argc, char **argv) {
 
     const bool uses_amix = merged_audio_inputs_should_use_amix(requested_audio_inputs);
     arg_parser.audio_codec = select_audio_codec_with_fallback(arg_parser.audio_codec, file_extension, uses_amix);
+    if(g_discord_session) arg_parser.audio_codec = GSR_AUDIO_CODEC_OPUS;   // Discord voice requires Opus
 
     vec2i video_size = {0, 0};
     std::vector<VideoSource> video_sources = create_video_sources(arg_parser, &egl, false, capture_sources, video_size);
@@ -4084,7 +4096,11 @@ int main(int argc, char **argv) {
         _exit(1);
     }
 
-    if(g_discord_session) gsr_encoder_set_video_packet_callback(&encoder, on_discord_video_packet, nullptr);
+    if(g_discord_session) {
+        gsr_encoder_set_video_packet_callback(&encoder, on_discord_video_packet, nullptr);
+        gsr_encoder_set_audio_packet_callback(&encoder, on_discord_audio_packet, nullptr);
+    }
+    
     gsr_video_encoder *video_encoder = create_video_encoder(&egl, arg_parser);
     if(!video_encoder) {
         fprintf(stderr, "gsr error: failed to create video encoder\n");

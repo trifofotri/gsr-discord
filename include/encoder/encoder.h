@@ -14,6 +14,7 @@ typedef struct AVFormatContext AVFormatContext;
 typedef struct AVStream AVStream;
 
 typedef void (*gsr_video_packet_callback)(void *userdata, const uint8_t *data, int size, bool is_keyframe, int64_t pts);
+typedef void (*gsr_audio_packet_callback)(void *userdata, const uint8_t *data, int size, int64_t pts, int stream_index);
 
 typedef struct {
     size_t id;
@@ -43,6 +44,9 @@ typedef struct {
     
     gsr_video_packet_callback on_video_packet;
     void *on_video_packet_userdata;
+
+    gsr_audio_packet_callback on_audio_packet;
+    void *on_audio_packet_userdata;
 } gsr_encoder;
 
 bool gsr_encoder_init(gsr_encoder *self, gsr_replay_storage replay_storage, size_t replay_buffer_num_packets, double replay_buffer_time, const char *replay_directory);
@@ -55,5 +59,6 @@ bool gsr_encoder_remove_recording_destination(gsr_encoder *self, size_t id);
 bool gsr_encoder_set_recording_destination_first_frame_ts_filepath(gsr_encoder *self, size_t id, const char *filepath);
 
 void gsr_encoder_set_video_packet_callback(gsr_encoder *self, gsr_video_packet_callback cb, void *userdata);
+void gsr_encoder_set_audio_packet_callback(gsr_encoder *self, gsr_audio_packet_callback cb, void *userdata);
 
 #endif /* GSR_ENCODER_H */
