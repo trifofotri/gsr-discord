@@ -14,6 +14,11 @@ resolves the Wayland host bridge from the running Flatpak's own deployment,
 allowing both per-user and system installations without a hardcoded application
 ID or installation root. See [CUSTOM.md](CUSTOM.md) for scope and attribution.
 
+USE IT LIKE THIS WITH THESE VARIABLES:
+```
+DISCORD_TOKEN="$(cat ~/.config/davecast/token)" \DISCORD_GUILD="<server id>" \DISCORD_CHANNEL="<voice channel id>" \gpu-screen-recorder -w screen -f 30 -k h264 -bm cbr -q 8000 -keyint 2 \    -o /dev/null -c mp4
+```
+
 This is a screen recorder that has minimal impact on system performance by recording your monitor using the GPU only,
 similar to shadowplay on windows. This is the fastest screen recording tool for Linux.
 
