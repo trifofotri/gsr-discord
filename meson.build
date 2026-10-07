@@ -82,6 +82,25 @@ if build_machine.system() == 'linux'
     ]
 endif
 
+davecast_dep = declare_dependency(
+    include_directories: include_directories(
+        'davecast/include',
+        'davecast/third_party',
+        'davecast/third_party/libdave/cpp/includes',
+    ),
+    link_args: [
+        'davecast/build/libdavecast.a',
+        'davecast/third_party/libdave/cpp/build/libdave.a',
+        'davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libmlspp.a',
+        'davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libmls_ds.a',
+        'davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libhpke.a',
+        '/davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libbytes.a',
+        'davecast/third_party/libdave/cpp/build/vcpkg_installed/x64-linux/lib/libtls_syntax.a',
+        '-lssl', '-lcrypto', '-lcurl',
+    ],
+)
+dep += [davecast_dep]
+
 uses_pipewire = false
 
 if get_option('portal') == true

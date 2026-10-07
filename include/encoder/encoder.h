@@ -13,6 +13,8 @@ typedef struct AVCodecContext AVCodecContext;
 typedef struct AVFormatContext AVFormatContext;
 typedef struct AVStream AVStream;
 
+typedef void (*gsr_video_packet_callback)(void *userdata, const uint8_t *data, int size, bool is_keyframe, int64_t pts);
+
 typedef struct {
     size_t id;
     AVCodecContext *codec_context;
@@ -38,6 +40,9 @@ typedef struct {
     gsr_encoder_recording_destination recording_destinations[GSR_MAX_RECORDING_DESTINATIONS];
     size_t num_recording_destinations;
     size_t recording_destination_id_counter;
+    
+    gsr_video_packet_callback on_video_packet;
+    void *on_video_packet_userdata;
 } gsr_encoder;
 
 bool gsr_encoder_init(gsr_encoder *self, gsr_replay_storage replay_storage, size_t replay_buffer_num_packets, double replay_buffer_time, const char *replay_directory);
@@ -48,5 +53,7 @@ void gsr_encoder_receive_packets(gsr_encoder *self, AVCodecContext *codec_contex
 size_t gsr_encoder_add_recording_destination(gsr_encoder *self, AVCodecContext *codec_context, AVFormatContext *format_context, AVStream *stream, int64_t start_pts);
 bool gsr_encoder_remove_recording_destination(gsr_encoder *self, size_t id);
 bool gsr_encoder_set_recording_destination_first_frame_ts_filepath(gsr_encoder *self, size_t id, const char *filepath);
+
+void gsr_encoder_set_video_packet_callback(gsr_encoder *self, gsr_video_packet_callback cb, void *userdata);
 
 #endif /* GSR_ENCODER_H */

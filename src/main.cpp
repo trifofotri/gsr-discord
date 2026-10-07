@@ -77,6 +77,9 @@ static const int VIDEO_STREAM_INDEX = 0;
 
 static thread_local char av_error_buffer[AV_ERROR_MAX_STRING_SIZE];
 
+static uint8_t *g_h264_extradata = nullptr;
+static int g_h264_extradata_size = 0;
+
 typedef struct {
     const gsr_window *window;
 } MonitorOutputCallbackUserdata;
@@ -790,6 +793,7 @@ static void open_video_hardware(AVCodecContext *codec_context, bool low_power, c
         // Improves performance but increases vram.
         // TODO: Might need a different async_depth for optimal performance on different amd/intel gpus
         av_dict_set_int(&options, "async_depth", 3, 0);
+        av_dict_set_int(&options, "forced-idr", 1, 0);
 
         if(codec_context->codec_id == AV_CODEC_ID_H264) {
             // Removed because it causes stutter in games for some people
@@ -817,6 +821,19 @@ static void open_video_hardware(AVCodecContext *codec_context, bool low_power, c
     if (ret < 0) {
         fprintf(stderr, "gsr error: Could not open video codec: %s\n", av_error_to_string(ret));
         _exit(1);
+    }
+
+    if(codec_context->extradata && codec_context->extradata_size >= 5) {
+        g_h264_extradata_size = codec_context->extradata_size;
+        g_h264_extradata = (uint8_t*)malloc(g_h264_extradata_size);
+        memcpy(g_h264_extradata, codec_context->extradata, g_h264_extradata_size);
+        fprintf(stderr, "[discord] cached %d bytes of extradata for keyframe prepending\n", g_h264_extradata_size);
+        fprintf(stderr, "[debug] extradata_size: %d first bytes: %02x %02x %02x %02x %02x\n",
+            codec_context->extradata_size,
+            codec_context->extradata[0], codec_context->extradata[1],
+            codec_context->extradata[2], codec_context->extradata[3], codec_context->extradata[4]);
+    } else {
+        fprintf(stderr, "[debug] extradata_size: %d (too small or null)\n", codec_context->extradata_size);
     }
 }
 
@@ -2825,6 +2842,33 @@ static bool string_to_capture_alignment(const char *str, size_t len, gsr_capture
     }
 }
 
+extern "C" {
+#include <davecast.h>
+#include <dcast_dave.h>
+}
+
+static dcast_session *g_discord_session = nullptr;
+
+static void on_discord_video_packet(void *userdata, const uint8_t *data, int size, bool is_keyframe, int64_t pts) {
+    (void)userdata; (void)pts;
+    if(!g_discord_session || !g_discord_session->live) return;
+    if(g_discord_session->dave_active && !dcast_dave_state.established) return; // same guard as every earlier round
+
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t pts_us = (uint64_t)ts.tv_sec * 1000000ull + ts.tv_nsec / 1000ull;
+
+    if(is_keyframe && g_h264_extradata) {
+        size_t total = g_h264_extradata_size + size;
+        uint8_t *buf = (uint8_t*)malloc(total);
+        memcpy(buf, g_h264_extradata, g_h264_extradata_size);
+        memcpy(buf + g_h264_extradata_size, data, size);
+        dcast_send_video(g_discord_session, buf, total, pts_us, 1);
+        free(buf);
+    } else {
+        dcast_send_video(g_discord_session, data, size, pts_us, is_keyframe ? 1 : 0);
+    }
+}
+
 static bool string_to_v4l2_pixfmt(const char *str, size_t len, gsr_capture_v4l2_pixfmt *pixfmt) {
     if(len == 4 && memcmp(str, "auto", 4) == 0) {
         *pixfmt = GSR_CAPTURE_V4L2_PIXFMT_AUTO;
@@ -3809,6 +3853,25 @@ int main(int argc, char **argv) {
 
     const Arg *audio_input_arg = args_parser_get_arg(&arg_parser, "-a");
     assert(audio_input_arg);
+    
+    const char *discord_token = getenv("DISCORD_TOKEN");
+    const char *discord_guild = getenv("DISCORD_GUILD");
+    const char *discord_channel = getenv("DISCORD_CHANNEL");
+    if(discord_token && discord_guild && discord_channel) {
+        static dcast_config discord_cfg = {};
+        discord_cfg.token = discord_token;
+        discord_cfg.guild_id = discord_guild;
+        discord_cfg.channel_id = discord_channel;
+        discord_cfg.client_version = "1.0.154";
+        discord_cfg.client_build = 626571;
+        discord_cfg.user_agent = "Mozilla/5.0 (X11; Linux x86_64) discord/1.0.154 Chrome/140.0.0.0";
+        discord_cfg.capabilities = 1767421;
+        discord_cfg.dave = DCAST_DAVE_REQUIRE;
+        discord_cfg.video.width = 1920; discord_cfg.video.height = 1080;
+        discord_cfg.video.framerate = arg_parser.fps; discord_cfg.video.kbps = 6000;
+        g_discord_session = dcast_connect(&discord_cfg);
+        if(!g_discord_session) fprintf(stderr, "gsr error: failed to connect to Discord\n");
+    }
 
     AudioDevices audio_devices;
     if(audio_input_arg->num_values > 0)
@@ -3886,6 +3949,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "gsr warning: portal capture option doesn't support hdr yet (PipeWire doesn't support hdr), the video will be tonemapped from hdr to sdr\n");
             arg_parser.video_codec = hdr_video_codec_to_sdr_video_codec(arg_parser.video_codec);
         }
+        if(g_discord_session) arg_parser.video_codec = GSR_VIDEO_CODEC_H264;
+        
     }
 
     gsr_egl egl;
@@ -4019,6 +4084,7 @@ int main(int argc, char **argv) {
         _exit(1);
     }
 
+    if(g_discord_session) gsr_encoder_set_video_packet_callback(&encoder, on_discord_video_packet, nullptr);
     gsr_video_encoder *video_encoder = create_video_encoder(&egl, arg_parser);
     if(!video_encoder) {
         fprintf(stderr, "gsr error: failed to create video encoder\n");
@@ -4498,6 +4564,15 @@ int main(int argc, char **argv) {
             damage_fps_counter = 0;
         }
 
+        if(g_discord_session) {
+            int r = dcast_poll(g_discord_session, 0);
+            if(r != 0) fprintf(stderr, "gsr warning: discord session error (r=%d)\n", r);
+            if(g_discord_session->pli_pending) {
+                g_discord_session->pli_pending = 0;
+                force_iframe_frame = true;
+            }
+        }
+        
         const double this_video_frame_time = clock_get_monotonic_seconds() - paused_time_offset;
         const int64_t expected_frames = std::floor((this_video_frame_time - record_start_time) / target_fps);
         const int64_t num_missed_frames = expected_frames - video_pts_counter;

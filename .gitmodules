@@ -1,0 +1,3 @@
+[submodule "davecast"]
+	path = davecast
+	url = git@github.com:trifofotri/davecast.git
