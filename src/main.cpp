@@ -3865,23 +3865,17 @@ int main(int argc, char **argv) {
     const Arg *audio_input_arg = args_parser_get_arg(&arg_parser, "-a");
     assert(audio_input_arg);
     
-    const char *discord_token = getenv("DISCORD_TOKEN");
-    const char *discord_guild = getenv("DISCORD_GUILD");
-    const char *discord_channel = getenv("DISCORD_CHANNEL");
-    if(discord_token && discord_guild && discord_channel) {
+    if (getenv("DISCORD_BRIDGE")) {
         static dcast_config discord_cfg = {};
-        discord_cfg.token = discord_token;
-        discord_cfg.guild_id = discord_guild;
-        discord_cfg.channel_id = discord_channel;
-        discord_cfg.client_version = "1.0.154";
-        discord_cfg.client_build = 626571;
-        discord_cfg.user_agent = "Mozilla/5.0 (X11; Linux x86_64) discord/1.0.154 Chrome/140.0.0.0";
-        discord_cfg.capabilities = 1767421;
         discord_cfg.dave = DCAST_DAVE_REQUIRE;
         discord_cfg.video.width = 1920; discord_cfg.video.height = 1080;
         discord_cfg.video.framerate = arg_parser.fps; discord_cfg.video.kbps = 6000;
-        g_discord_session = dcast_connect(&discord_cfg);
-        if(!g_discord_session) fprintf(stderr, "gsr error: failed to connect to Discord\n");
+        g_discord_session = dcast_new(&discord_cfg);
+        if (!g_discord_session || dcast_bridge_listen(47813) != 0) {
+            fprintf(stderr, "gsr error: discord bridge failed to start\n");
+        } else {
+            fprintf(stderr, "[discord] waiting for the bridge button...\n");
+        }
     }
 
     AudioDevices audio_devices;
@@ -4581,12 +4575,18 @@ int main(int argc, char **argv) {
         }
 
         if(g_discord_session) {
+            dcast_bridge_poll(g_discord_session);
             int r = dcast_poll(g_discord_session, 0);
             if(r != 0) fprintf(stderr, "gsr warning: discord session error (r=%d)\n", r);
             if(g_discord_session->pli_pending) {
                 g_discord_session->pli_pending = 0;
                 force_iframe_frame = true;
             }
+        }
+
+        if(g_discord_session && arg_parser.framerate_mode != GSR_FRAMERATE_MODE_CONSTANT) {
+            fprintf(stderr, "gsr info: forcing constant framerate mode for Discord streaming (was %d)\n", arg_parser.framerate_mode);
+            arg_parser.framerate_mode = GSR_FRAMERATE_MODE_CONSTANT;
         }
         
         const double this_video_frame_time = clock_get_monotonic_seconds() - paused_time_offset;
