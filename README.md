@@ -1,6 +1,30 @@
 ![](https://dec05eba.com/images/gpu_screen_recorder_logo_small.png)
 
-# GPU Screen Recorder
+# gsr-discord
+
+<p align="center">
+  Stream your screen to discord straight from the GPU, using one button.
+</p>
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/trifofotri/gsr-discord/master/davecast-bridge.user.js"><b>Install the userscript</b></a>
+</p>
+
+## Building notice
+
+You'll need to build davecast before gsr, just follow [these instructions](https://github.com/trifofotri/davecast#build) and build gsr normally after.
+
+## How to stream using this
+
+```sh
+DISCORD_BRIDGE=1 gpu-screen-recorder -w screen -f 30 -k h264 -bm cbr -q 8000 -keyint 2 -o /dev/null -c mp4
+```
+ 
+1. Open discord in the browser where the userscript is installed
+2. Join a vc
+3. Click the button in the bottom right corner
+
+If the button says `armed - click share screen`, click discord's normal '*Share Screen*' button and pick anything, the bridge intercepts the stream.
 
 > [!IMPORTANT]
 > This repository is an unofficial, independently maintained fork. It preserves
@@ -14,10 +38,9 @@ resolves the Wayland host bridge from the running Flatpak's own deployment,
 allowing both per-user and system installations without a hardcoded application
 ID or installation root. See [CUSTOM.md](CUSTOM.md) for scope and attribution.
 
-USE IT LIKE THIS WITH THESE VARIABLES:
-```
-DISCORD_TOKEN="$(cat ~/.config/davecast/token)" \DISCORD_GUILD="<server id>" \DISCORD_CHANNEL="<voice channel id>" \gpu-screen-recorder -w screen -f 30 -k h264 -bm cbr -q 8000 -keyint 2 \    -o /dev/null -c mp4
-```
+> [!WARNING]
+> Streaming with a custom program and a modified client is not something Discord supports, and it may violate Discord's Terms of Service. Use it at your own risk, ideally on an account you can afford to lose.
+
 
 This is a screen recorder that has minimal impact on system performance by recording your monitor using the GPU only,
 similar to shadowplay on windows. This is the fastest screen recording tool for Linux.
