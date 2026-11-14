@@ -3776,7 +3776,8 @@ static void install_cuda_no_stable_perf_limit() {
 }
 
 static void on_discord_audio_packet(void *userdata, const uint8_t *data, int size, int64_t pts, int stream_index) {
-    (void)userdata; (void)pts; (void)stream_index;
+    (void)userdata; (void)pts;
+    if(stream_index != 1) return;   /* first audio track only; one SSRC can't carry several tracks */
     if(!g_discord_session || !g_discord_session->live) return;
     if(g_discord_session->dave_active && !dcast_dave_state.established) return;
 
